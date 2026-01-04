@@ -1,0 +1,63 @@
+{
+  "version": "v1.0.0",
+  "categories": {
+    "mountain": "Mountain or peak",
+    "lake": "Lake or water body",
+    "temple": "Temple or religious site",
+    "museum": "Museum or cultural institution",
+    "park": "Park or garden",
+    "coast": "Coastal area or beach",
+    "cityscape": "Urban cityscape",
+    "monument": "Monument or memorial",
+    "bridge": "Bridge",
+    "palace": "Palace or castle",
+    "tower": "Tower or pagoda",
+    "cave": "Cave or grotto",
+    "waterfall": "Waterfall",
+    "valley": "Valley or canyon",
+    "island": "Island"
+  },
+  "visual_tags": {
+    "snow_peak": "Snow-covered peak",
+    "autumn_foliage": "Autumn foliage or fall colors",
+    "cherry_blossom": "Cherry blossom or sakura",
+    "night_view": "Night view or illuminated",
+    "sunset": "Sunset view",
+    "sunrise": "Sunrise view",
+    "foggy": "Foggy or misty",
+    "rainy": "Rainy scene",
+    "snowy": "Snowy landscape",
+    "sunny": "Sunny clear day",
+    "cloudy": "Cloudy sky",
+    "spring_greenery": "Spring green vegetation",
+    "summer_lush": "Summer lush vegetation",
+    "winter_barren": "Winter barren landscape",
+    "ice": "Ice or frozen",
+    "blooming_flowers": "Blooming flowers",
+    "falling_leaves": "Falling autumn leaves"
+  },
+  "scene_tags": {
+    "sunrise": "Sunrise scene",
+    "sunset": "Sunset scene",
+    "hiking_trail": "Hiking trail or path",
+    "skyline_view": "City skyline view",
+    "panoramic": "Panoramic view",
+    "close_up": "Close-up detail",
+    "aerial": "Aerial or bird's eye view",
+    "ground_level": "Ground level view",
+    "interior": "Interior view",
+    "exterior": "Exterior view",
+    "crowded": "Crowded with people",
+    "empty": "Empty or quiet",
+    "festival": "Festival or event",
+    "ceremony": "Ceremony or ritual"
+  },
+  "seasons": {
+    "spring": "Spring season (March-May in Northern Hemisphere)",
+    "summer": "Summer season (June-August in Northern Hemisphere)",
+    "autumn": "Autumn/Fall season (September-November in Northern Hemisphere)",
+    "winter": "Winter season (December-February in Northern Hemisphere)",
+    "unknown": "Unknown or not season-specific"
+  }
+}
+
