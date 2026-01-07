@@ -139,34 +139,77 @@ class EnrichmentService:
     def enrich_commons_assets(
         self,
         viewpoint_id: int,
-        limit: int = 10
+        limit: int = 10,
+        include_image_data: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Get Commons asset metadata for a viewpoint.
+        
+        Args:
+            viewpoint_id: Viewpoint ID
+            limit: Maximum number of assets to return
+            include_image_data: If True, include image binary data (use with caution for large images)
         
         Returns:
             List of Commons asset records
         """
         with db.get_cursor() as cursor:
-            cursor.execute("""
-                SELECT 
-                    commons_file_id,
-                    commons_page,
-                    caption,
-                    categories,
-                    depicts_wikidata,
-                    timestamp,
-                    hash,
-                    license
-                FROM viewpoint_commons_assets
-                WHERE viewpoint_id = %s
-                ORDER BY timestamp DESC NULLS LAST
-                LIMIT %s
-            """, (viewpoint_id, limit))
+            # Select columns based on whether image data is needed
+            if include_image_data:
+                cursor.execute("""
+                    SELECT 
+                        id,
+                        commons_file_id,
+                        commons_page,
+                        caption,
+                        categories,
+                        depicts_wikidata,
+                        timestamp,
+                        hash,
+                        license,
+                        image_blob,
+                        ST_AsGeoJSON(image_geometry)::jsonb as image_geometry,
+                        image_exif,
+                        image_width,
+                        image_height,
+                        image_format,
+                        file_size_bytes,
+                        downloaded_at
+                    FROM viewpoint_commons_assets
+                    WHERE viewpoint_id = %s
+                    ORDER BY timestamp DESC NULLS LAST
+                    LIMIT %s
+                """, (viewpoint_id, limit))
+            else:
+                cursor.execute("""
+                    SELECT 
+                        id,
+                        commons_file_id,
+                        commons_page,
+                        caption,
+                        categories,
+                        depicts_wikidata,
+                        timestamp,
+                        hash,
+                        license,
+                        ST_AsGeoJSON(image_geometry)::jsonb as image_geometry,
+                        image_exif,
+                        image_width,
+                        image_height,
+                        image_format,
+                        file_size_bytes,
+                        downloaded_at
+                    FROM viewpoint_commons_assets
+                    WHERE viewpoint_id = %s
+                    ORDER BY timestamp DESC NULLS LAST
+                    LIMIT %s
+                """, (viewpoint_id, limit))
             
             rows = cursor.fetchall()
-            return [
-                {
+            results = []
+            for row in rows:
+                asset = {
+                    "id": row['id'],
                     "file_id": row['commons_file_id'],
                     "page": row['commons_page'],
                     "caption": row['caption'],
@@ -174,10 +217,44 @@ class EnrichmentService:
                     "depicts": row['depicts_wikidata'] or [],
                     "timestamp": row['timestamp'].isoformat() if row['timestamp'] else None,
                     "hash": row['hash'],
-                    "license": row['license']
+                    "license": row['license'],
+                    "has_image": row.get('image_blob') is not None or row.get('downloaded_at') is not None,
+                    "image_width": row.get('image_width'),
+                    "image_height": row.get('image_height'),
+                    "image_format": row.get('image_format'),
+                    "file_size_bytes": row.get('file_size_bytes'),
+                    "downloaded_at": row['downloaded_at'].isoformat() if row.get('downloaded_at') else None
                 }
-                for row in rows
-            ]
+                
+                # Add geolocation if available
+                if row.get('image_geometry'):
+                    geom = row['image_geometry']
+                    if geom and 'coordinates' in geom:
+                        # GeoJSON format: [lng, lat]
+                        coords = geom['coordinates']
+                        asset['geolocation'] = {
+                            "longitude": coords[0],
+                            "latitude": coords[1],
+                            "geometry": geom
+                        }
+                
+                # Add EXIF metadata summary (not full data to avoid large responses)
+                if row.get('image_exif'):
+                    exif = row['image_exif']
+                    asset['exif_summary'] = {
+                        "has_gps": 'gps' in exif and 'latitude' in exif.get('gps', {}),
+                        "datetime": exif.get('exif', {}).get('datetime_original') or exif.get('exif', {}).get('datetime')
+                    }
+                
+                # Include image data only if requested
+                if include_image_data and row.get('image_blob'):
+                    import base64
+                    asset['image_data_base64'] = base64.b64encode(row['image_blob']).decode('utf-8')
+                    asset['image_mime_type'] = f"image/{row.get('image_format', 'jpeg').lower()}"
+                
+                results.append(asset)
+            
+            return results
     
     def get_historical_summary(
         self,

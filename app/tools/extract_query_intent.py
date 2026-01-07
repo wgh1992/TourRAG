@@ -48,8 +48,8 @@ class ExtractQueryIntentTool:
         self.client = openai_client or OpenAI(api_key=settings.OPENAI_API_KEY)
         self.tag_schema_version = settings.TAG_SCHEMA_VERSION
         self.tag_schema = load_tag_schema(self.tag_schema_version)
-        # Force use of GPT-4o for vision capabilities
-        self.model = "gpt-4o"
+        # Use gpt-4o-mini for cost efficiency (supports vision)
+        self.model = "gpt-4o-mini"
     
     def _build_system_prompt(self) -> str:
         """Build system prompt with strict constraints"""
@@ -59,34 +59,74 @@ class ExtractQueryIntentTool:
         
         return f"""You are a query intent extraction tool for a viewpoint/tourist attraction RAG system.
 
-Your ONLY job is to extract structured query intent from user input (text and optional images).
+Your job is to extract structured query intent from user input (text and optional images) to help find relevant tourist attractions.
 
 CRITICAL CONSTRAINTS:
 1. query_tags MUST come from the controlled vocabulary below. NEVER generate free-text tags.
-2. If uncertain about season, set season_hint = "unknown" and explain in confidence_notes.
-3. You ONLY extract intent - you do NOT identify specific viewpoints, fetch data, or generate facts.
+2. Extract ALL relevant tags from the query - be thorough but accurate.
+3. If uncertain about season, set season_hint = "unknown" and explain in confidence_notes.
+4. Extract place names even if partial or in different languages.
+5. You ONLY extract intent - you do NOT identify specific viewpoints, fetch data, or generate facts.
 
 CONTROLLED TAG VOCABULARY:
 - Categories: {', '.join(categories)}
 - Visual Tags: {', '.join(visual_tags)}
 - Scene Tags: {', '.join(scene_tags)}
 
+EXAMPLES:
+Input: "Mount Fuji in winter"
+Output: {{
+  "name_candidates": ["Mount Fuji", "Fuji"],
+  "query_tags": ["mountain", "snow_peak", "snowy"],
+  "season_hint": "winter",
+  "scene_hints": [],
+  "geo_hints": {{"place_name": null, "country": null}},
+  "confidence_notes": []
+}}
+
+Input: "春天的樱花寺庙"
+Output: {{
+  "name_candidates": [],
+  "query_tags": ["temple", "cherry_blossom", "blooming_flowers"],
+  "season_hint": "spring",
+  "scene_hints": [],
+  "geo_hints": {{"place_name": null, "country": null}},
+  "confidence_notes": []
+}}
+
+Input: "beautiful lake with sunset"
+Output: {{
+  "name_candidates": [],
+  "query_tags": ["lake", "sunset"],
+  "season_hint": "unknown",
+  "scene_hints": ["sunset"],
+  "geo_hints": {{"place_name": null, "country": null}},
+  "confidence_notes": []
+}}
+
 OUTPUT FORMAT:
 You must output valid JSON matching this exact schema:
 {{
   "query_intent": {{
-    "name_candidates": ["string"],
-    "query_tags": ["string"],  // MUST be from controlled vocabulary
+    "name_candidates": ["string"],  // Extract any place names mentioned (even partial)
+    "query_tags": ["string"],  // MUST be from controlled vocabulary - extract ALL relevant tags
     "season_hint": "spring|summer|autumn|winter|unknown",
-    "scene_hints": ["string"],
+    "scene_hints": ["string"],  // Optional scene descriptions
     "geo_hints": {{
-      "place_name": "string|null",
-      "country": "string|null"
+      "place_name": "string|null",  // City, region, or area name
+      "country": "string|null"  // Country name if mentioned
     }},
     "confidence_notes": ["string"]
   }},
   "tag_schema_version": "{self.tag_schema_version}"
 }}
+
+IMPORTANT:
+- Be thorough: extract ALL relevant tags from the query
+- Map synonyms: "mountain" → "mountain", "peak" → "mountain", "hill" → "mountain"
+- Map visual descriptions: "snowy" → "snowy", "covered in snow" → "snowy", "winter scene" → ["snowy", "winter_barren"]
+- Extract place names: even partial names like "Fuji" should be in name_candidates
+- If the query is vague, still try to extract at least category tags (mountain, lake, temple, etc.)
 
 Remember: query_tags must ONLY contain values from the controlled vocabulary listed above."""
     

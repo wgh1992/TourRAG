@@ -41,10 +41,25 @@ class RetrievalService:
         
         # Prepare parameters for array matching
         name_patterns = [f"%{name}%" for name in query_intent.name_candidates] if query_intent.name_candidates else []
-        category_list = [tag for tag in query_intent.query_tags 
-                        if tag in ['mountain', 'lake', 'temple', 'museum', 'park', 
-                                  'coast', 'cityscape', 'monument', 'bridge', 
-                                  'palace', 'tower', 'cave', 'waterfall', 'valley', 'island']]
+        
+        # Extract category tags (these match category_norm in database)
+        valid_categories = ['mountain', 'lake', 'temple', 'museum', 'park', 
+                           'coast', 'cityscape', 'monument', 'bridge', 
+                           'palace', 'tower', 'cave', 'waterfall', 'valley', 'island']
+        category_list = [tag for tag in query_intent.query_tags if tag in valid_categories]
+        
+        # Also try to extract category from visual/scene tags if no category found
+        # Some visual tags can hint at categories (e.g., snow_peak → mountain)
+        if not category_list and query_intent.query_tags:
+            visual_to_category = {
+                'snow_peak': 'mountain',
+                'waterfall': 'waterfall',
+                'lake': 'lake',
+            }
+            for tag in query_intent.query_tags:
+                if tag in visual_to_category:
+                    category_list.append(visual_to_category[tag])
+                    break
         
         # Build SQL query with psycopg2 parameterized queries
         conditions = []
@@ -80,15 +95,16 @@ class RetrievalService:
             ])
         
         # Build final query
+        # If no conditions, return popular viewpoints (fallback)
         where_clause = " AND ".join(conditions) if conditions else "1=1"
         
         # Build SQL - use simpler approach without ANY() for arrays
         # Instead, use OR conditions for name matching and IN for categories
-        name_score_sql = "0.5"  # Default score
+        name_score_sql = "0.0"  # Default score when no name match
         if name_patterns:
             # Build OR conditions for name matching
             name_ors = " OR ".join(["name_primary ILIKE %s"] * len(name_patterns))
-            name_score_sql = f"CASE WHEN ({name_ors}) THEN 1.0 ELSE 0.5 END"
+            name_score_sql = f"CASE WHEN ({name_ors}) THEN 1.0 ELSE 0.0 END"
             params.extend(name_patterns)
         
         category_score_sql = "0.0"  # Default score
@@ -96,6 +112,13 @@ class RetrievalService:
             placeholders = ','.join(['%s'] * len(category_list))
             category_score_sql = f"CASE WHEN category_norm IN ({placeholders}) THEN 1.0 ELSE 0.0 END"
             params.extend(category_list)
+        
+        # If no filters at all, try to use text search as fallback
+        if not conditions:
+            # No filters - if we have name candidates or query tags, something went wrong
+            # Otherwise, return popular viewpoints as fallback
+            where_clause = "1=1"
+            print(f"[Retrieval] WARNING: No search conditions - falling back to popular viewpoints")
         
         sql = f"""
         SELECT 
@@ -113,9 +136,8 @@ class RetrievalService:
         FROM viewpoint_entity
         WHERE {where_clause}
         ORDER BY 
-            name_score DESC,
-            popularity DESC,
-            category_score DESC
+            ({name_score_sql} + {category_score_sql}) DESC,
+            popularity DESC NULLS LAST
         LIMIT %s
         """
         
@@ -130,25 +152,36 @@ class RetrievalService:
         })
         
         # Execute query
-        with db.get_cursor() as cursor:
-            cursor.execute(sql, final_params)
-            rows = cursor.fetchall()
-        
-        # Convert to ViewpointCandidate objects
-        candidates = []
-        for row in rows:
-            candidates.append(ViewpointCandidate(
-                viewpoint_id=row['viewpoint_id'],
-                name_primary=row['name_primary'],
-                name_variants=row['name_variants'] or {},
-                category_norm=row['category_norm'],
-                name_score=float(row['name_score']),
-                geo_score=float(row['geo_score']),
-                category_score=float(row['category_score']),
-                popularity=float(row['popularity'])
-            ))
-        
-        return candidates, sql_queries_log
+        try:
+            with db.get_cursor() as cursor:
+                cursor.execute(sql, final_params)
+                rows = cursor.fetchall()
+            
+            print(f"[Retrieval] Query executed: {len(rows)} rows found")
+            print(f"[Retrieval] WHERE clause: {where_clause}")
+            print(f"[Retrieval] Name patterns: {name_patterns}, Categories: {category_list}")
+            
+            # Convert to ViewpointCandidate objects
+            candidates = []
+            for row in rows:
+                candidates.append(ViewpointCandidate(
+                    viewpoint_id=row['viewpoint_id'],
+                    name_primary=row['name_primary'],
+                    name_variants=row['name_variants'] or {},
+                    category_norm=row['category_norm'],
+                    name_score=float(row['name_score']),
+                    geo_score=float(row['geo_score']),
+                    category_score=float(row['category_score']),
+                    popularity=float(row['popularity'])
+                ))
+            
+            print(f"[Retrieval] Returning {len(candidates)} candidates")
+            return candidates, sql_queries_log
+        except Exception as e:
+            print(f"[Retrieval] Error executing query: {e}")
+            print(f"[Retrieval] SQL: {sql}")
+            print(f"[Retrieval] Params: {final_params}")
+            raise
 
 
 # Singleton instance

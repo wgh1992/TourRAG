@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     
     # OpenAI
     OPENAI_API_KEY: str
-    OPENAI_MODEL: str = "gpt-4o"  # GPT-4o is required for image processing
+    OPENAI_MODEL: str = "gpt-4o-mini"  # Use gpt-4o-mini for cost efficiency (supports vision)
     
     # MCP
     MCP_SERVER_URL: str = "http://localhost:8001"

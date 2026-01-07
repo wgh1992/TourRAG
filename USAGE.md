@@ -39,6 +39,40 @@ uvicorn app.main:app --reload
 
 服务将在 http://localhost:8000 启动
 
+### 4. 使用 Web UI
+
+启动服务后，在浏览器中访问 **http://localhost:8000** 即可使用图形界面：
+
+- **文本搜索**：输入自然语言查询（支持中英文）
+- **图片上传**：上传图片进行视觉搜索
+- **结果展示**：查看匹配的景点及其详细信息
+- **详情查看**：点击任意景点卡片查看完整信息
+
+Web UI 功能：
+- 实时查询意图展示
+- 可视化标签和匹配度
+- 响应式设计，支持移动端
+- 景点详情模态窗口
+
+### 5. 快速测试搜索功能
+
+使用测试脚本快速验证搜索功能：
+
+```bash
+# 使用默认查询测试
+python test_search.py
+
+# 使用自定义查询测试
+python test_search.py "Mount Fuji in winter"
+python test_search.py "春天的樱花寺庙"
+```
+
+测试脚本会显示：
+- 健康检查状态
+- 查询意图提取结果
+- 搜索结果和匹配度
+- MCP 工具使用情况
+
 ## API 使用示例
 
 ### 1. 健康检查
@@ -47,7 +81,85 @@ uvicorn app.main:app --reload
 curl http://localhost:8000/health
 ```
 
-### 2. 提取查询意图（MCP Tool）
+响应示例：
+```json
+{
+  "status": "healthy",
+  "database": "connected"
+}
+```
+
+### 2. 完整搜索示例（推荐）
+
+这是最常用的端点，执行完整的搜索流程（MCP 推理 → SQL 检索 → 增强 → LLM 融合）：
+
+```bash
+# 示例 1: 搜索冬季的富士山
+curl -X POST "http://localhost:8000/api/v1/query?user_text=Mount%20Fuji%20in%20winter&top_k=5" \
+  -H "Content-Type: application/json"
+```
+
+响应示例：
+```json
+{
+  "query_intent": {
+    "name_candidates": ["Mount Fuji", "Fuji"],
+    "query_tags": ["mountain", "snow_peak"],
+    "season_hint": "winter",
+    "scene_hints": [],
+    "geo_hints": {
+      "place_name": null,
+      "country": null
+    },
+    "confidence_notes": []
+  },
+  "candidates": [
+    {
+      "viewpoint_id": 123,
+      "name_primary": "Mount Fuji",
+      "name_variants": {"name:en": "Mount Fuji", "name:ja": "富士山"},
+      "category_norm": "mountain",
+      "historical_summary": "Mount Fuji is Japan's highest peak...",
+      "visual_tags": [
+        {
+          "season": "winter",
+          "tags": ["snow_peak", "snowy", "mountain"],
+          "confidence": 0.95,
+          "evidence": [...],
+          "tag_source": "wiki_weak_supervision"
+        }
+      ],
+      "match_confidence": 0.92,
+      "match_explanation": "Strong match: name matches 'Mount Fuji', winter season matches visual tags, snow_peak tag present"
+    }
+  ],
+  "sql_queries": [...],
+  "tool_calls": [
+    {
+      "tool": "extract_query_intent",
+      "input": {...},
+      "output": {...}
+    }
+  ],
+  "execution_time_ms": 1234,
+  "tag_schema_version": "v1.0.0"
+}
+```
+
+```bash
+# 示例 2: 中文搜索 - 春天的樱花
+curl -X POST "http://localhost:8000/api/v1/query?user_text=春天的樱花寺庙&top_k=3&language=zh" \
+  -H "Content-Type: application/json"
+```
+
+```bash
+# 示例 3: 图片搜索
+curl -X POST "http://localhost:8000/api/v1/query?top_k=5" \
+  -F "user_text=这是什么景点？" \
+  -F "user_images=@/path/to/image.jpg"
+```
+
+### 3. 提取查询意图（MCP Tool）
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/extract-query-intent \
@@ -76,22 +188,42 @@ curl -X POST http://localhost:8000/api/v1/extract-query-intent \
 }
 ```
 
-### 3. 完整查询（文本输入）
+### 5. Agent 查询（GPT-4o-mini + 工具调用）
+
+使用 GPT-4o-mini 智能代理，自动使用工具搜索和回答问题：
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/query?user_text=Mount Fuji winter&top_k=3" \
-  -H "Content-Type: application/json"
+curl -X POST "http://localhost:8000/api/v1/agent/query?user_query=我想看冬天的富士山&language=zh"
 ```
 
-### 4. 完整查询（文本 + 图片）
-
-```bash
-curl -X POST "http://localhost:8000/api/v1/query?top_k=5" \
-  -F "user_text=这是什么景点？" \
-  -F "user_images=@/path/to/image.jpg"
+响应示例：
+```json
+{
+  "answer": "根据您的查询，我找到了以下关于冬季富士山的景点：\n\n1. **Mount Fuji** - 这是日本最高的山峰，在冬季时被雪覆盖，呈现出壮观的雪峰景象...",
+  "tool_calls": [
+    {
+      "tool": "extract_query_intent",
+      "arguments": {...},
+      "result": {...}
+    },
+    {
+      "tool": "search_viewpoints",
+      "arguments": {...},
+      "result": {...}
+    }
+  ],
+  "iterations": 2
+}
 ```
 
-### 5. 获取景点详情
+Agent 会自动：
+- 提取查询意图
+- 搜索数据库
+- 获取详细信息
+- 排名和解释结果
+- 生成自然语言回答
+
+### 6. 获取景点详情
 
 ```bash
 curl http://localhost:8000/api/v1/viewpoint/1
@@ -102,7 +234,29 @@ curl http://localhost:8000/api/v1/viewpoint/1
 ```python
 import requests
 
-# 1. 提取查询意图
+# 1. 完整搜索（推荐使用）
+response = requests.post(
+    "http://localhost:8000/api/v1/query",
+    params={
+        "user_text": "Mount Fuji in winter",
+        "top_k": 5,
+        "language": "en"
+    }
+)
+results = response.json()
+
+print(f"Query Intent: {results['query_intent']}")
+print(f"Found {len(results['candidates'])} candidates in {results['execution_time_ms']}ms")
+print("\nResults:")
+for candidate in results['candidates']:
+    print(f"\n- {candidate['name_primary']}")
+    print(f"  Match: {candidate['match_confidence']:.2%}")
+    print(f"  Explanation: {candidate['match_explanation']}")
+    if candidate['visual_tags']:
+        for vt in candidate['visual_tags']:
+            print(f"  {vt['season']}: {', '.join(vt['tags'])}")
+
+# 2. 提取查询意图（仅提取，不搜索）
 response = requests.post(
     "http://localhost:8000/api/v1/extract-query-intent",
     json={
@@ -111,20 +265,14 @@ response = requests.post(
     }
 )
 intent = response.json()
-print(intent)
+print(f"\nExtracted Intent: {intent['query_intent']}")
 
-# 2. 完整查询
-response = requests.post(
-    "http://localhost:8000/api/v1/query",
-    params={
-        "user_text": "Mount Fuji",
-        "top_k": 5
-    }
-)
-results = response.json()
-print(f"Found {len(results['candidates'])} candidates")
-for candidate in results['candidates']:
-    print(f"- {candidate['name_primary']}: {candidate['match_confidence']:.2f}")
+# 3. 获取景点详情
+viewpoint_id = results['candidates'][0]['viewpoint_id']
+detail = requests.get(f"http://localhost:8000/api/v1/viewpoint/{viewpoint_id}").json()
+print(f"\nViewpoint Detail: {detail['name_primary']}")
+if detail.get('wikipedia'):
+    print(f"Summary: {detail['wikipedia']['extract_text'][:200]}...")
 ```
 
 ## 系统架构说明
