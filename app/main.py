@@ -11,7 +11,7 @@ from typing import Optional, List
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from psycopg2.extras import Json
 
 from app.config import settings
@@ -176,7 +176,7 @@ async def query_viewpoints(
                 tag_schema_version = result.get('tag_schema_version', 'v1.0.0')
         
         # Collect SQL queries and candidates from SQL search tools
-        sql_tools = ['search_by_name', 'search_by_category', 'search_by_tags', 'search_popular']
+        sql_tools = ['search_by_name', 'search_by_category', 'search_by_tags', 'search_popular', 'search_with_llm_sql']
         if tool_name in sql_tools:
             if 'sql' in result:
                 sql_queries_log.append({
@@ -367,6 +367,124 @@ async def get_viewpoint_detail(viewpoint_id: int):
         "commons_assets": commons_assets,
         "historical_summary": historical_summary,
         "historical_evidence": [e.model_dump() for e in historical_evidence]
+    }
+
+
+@app.get("/api/v1/viewpoints/map")
+async def get_viewpoints_for_map(
+    limit: Optional[int] = Query(None, description="Limit number of viewpoints to return"),
+    min_popularity: Optional[float] = Query(None, description="Minimum popularity score")
+):
+    """
+    Get all viewpoints with coordinates for map display (optimized for performance).
+    
+    Returns minimal data: only id, lat, lng, and name for fast rendering.
+    """
+    with db.get_cursor() as cursor:
+        query = """
+            SELECT 
+                v.viewpoint_id,
+                v.name_primary,
+                ST_Y(v.geom::geometry) as latitude,
+                ST_X(v.geom::geometry) as longitude
+            FROM viewpoint_entity v
+            WHERE v.geom IS NOT NULL
+        """
+        
+        params = []
+        if min_popularity is not None:
+            query += " AND v.popularity >= %s"
+            params.append(min_popularity)
+        
+        query += " ORDER BY v.viewpoint_id"
+        
+        if limit:
+            query += " LIMIT %s"
+            params.append(limit)
+        
+        cursor.execute(query, params)
+        viewpoints = cursor.fetchall()
+    
+    # Return minimal data for fast rendering
+    return {
+        "viewpoints": [
+            {
+                "id": v['viewpoint_id'],
+                "n": v['name_primary'] or 'Unnamed',
+                "lat": float(v['latitude']),
+                "lng": float(v['longitude'])
+            }
+            for v in viewpoints
+        ],
+        "total": len(viewpoints)
+    }
+
+
+@app.get("/api/v1/image/{asset_id}")
+async def get_image(asset_id: int):
+    """
+    Get image data for a specific Commons asset.
+    
+    Returns the image binary data with appropriate content type.
+    """
+    with db.get_cursor() as cursor:
+        cursor.execute("""
+            SELECT 
+                image_blob,
+                image_format,
+                image_width,
+                image_height
+            FROM viewpoint_commons_assets
+            WHERE id = %s AND image_blob IS NOT NULL
+        """, (asset_id,))
+        
+        result = cursor.fetchone()
+        
+        if not result:
+            raise HTTPException(status_code=404, detail="Image not found")
+        
+        image_blob = result['image_blob']
+        image_format = result['image_format'] or 'jpeg'
+        
+        # Determine content type
+        content_types = {
+            'jpeg': 'image/jpeg',
+            'jpg': 'image/jpeg',
+            'png': 'image/png',
+            'gif': 'image/gif',
+            'webp': 'image/webp'
+        }
+        content_type = content_types.get(image_format.lower(), 'image/jpeg')
+        
+        return Response(
+            content=bytes(image_blob),
+            media_type=content_type
+        )
+
+
+@app.get("/api/v1/viewpoint/{viewpoint_id}/images")
+async def get_viewpoint_images(
+    viewpoint_id: int,
+    include_data: bool = Query(False, description="Include base64 image data in response")
+):
+    """
+    Get all images for a specific viewpoint.
+    
+    By default, returns metadata only. Set include_data=true to include base64-encoded image data.
+    """
+    from app.services.enrichment import get_enrichment_service
+    
+    enrichment = get_enrichment_service()
+    assets = enrichment.enrich_commons_assets(
+        viewpoint_id=viewpoint_id,
+        limit=50,
+        include_image_data=include_data
+    )
+    
+    return {
+        "viewpoint_id": viewpoint_id,
+        "images": assets,
+        "count": len(assets)
     }
 
 

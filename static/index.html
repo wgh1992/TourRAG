@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TourRAG - Viewpoint Search & Recommendation</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         * {
             margin: 0;
@@ -454,6 +456,71 @@
             color: white;
         }
 
+        .map-container {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+            display: block;
+        }
+
+        .map-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .map-header h2 {
+            color: #333;
+            font-size: 1.8rem;
+        }
+
+        .map-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .map-controls button {
+            padding: 8px 16px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background 0.3s;
+        }
+
+        .map-controls button:hover {
+            background: #5568d3;
+        }
+
+        .map-controls select {
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 0.9rem;
+        }
+
+        #map {
+            width: 100%;
+            height: 600px;
+            border-radius: 8px;
+            border: 2px solid #e0e0e0;
+        }
+
+        .map-stats {
+            margin-top: 15px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            color: #666;
+        }
+
         @media (max-width: 768px) {
             .header h1 {
                 font-size: 2rem;
@@ -544,6 +611,23 @@
 
         <div class="error-message" id="errorMessage"></div>
 
+        <div class="map-container" id="mapContainer">
+            <div class="map-header">
+                <h2>🌍 Viewpoints Map</h2>
+                <div class="map-controls">
+                    <select id="mapLimit" onchange="loadMap()">
+                        <option value="">Show All</option>
+                        <option value="100">Show 100</option>
+                        <option value="500">Show 500</option>
+                        <option value="1000">Show 1000</option>
+                    </select>
+                    <button onclick="loadMap()">Refresh Map</button>
+                </div>
+            </div>
+            <div id="map"></div>
+            <div class="map-stats" id="mapStats">Loading viewpoints...</div>
+        </div>
+
         <div class="results-container" id="resultsContainer">
             <div class="results-header">
                 <h2>Search Results</h2>
@@ -560,10 +644,14 @@
         <div class="detail-content" id="detailContent"></div>
     </div>
 
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
         // Auto-detect API base URL
         const API_BASE = window.location.origin;
         let uploadedImages = [];
+        let map = null;
+        let mapMarkers = [];
 
         // Handle image upload
         document.getElementById('imageUpload').addEventListener('change', function(e) {
@@ -851,6 +939,62 @@
                     `;
                 }
 
+                // Load and display images
+                if (data.commons_assets && data.commons_assets.length > 0) {
+                    html += '<div class="detail-section"><h3>Images</h3>';
+                    html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">';
+                    
+                    data.commons_assets.forEach(asset => {
+                        if (asset.has_image) {
+                            const imageUrl = `${API_BASE}/api/v1/image/${asset.id}`;
+                            html += `
+                                <div style="border-radius: 8px; overflow: hidden; border: 2px solid #e0e0e0;">
+                                    <img src="${imageUrl}" 
+                                         alt="${asset.caption || 'Viewpoint image'}" 
+                                         style="width: 100%; height: 200px; object-fit: cover; cursor: pointer;"
+                                         onclick="window.open('${imageUrl}', '_blank')"
+                                         onerror="this.style.display='none'">
+                                    ${asset.caption ? `<div style="padding: 8px; font-size: 0.85rem; color: #666;">${asset.caption.substring(0, 50)}${asset.caption.length > 50 ? '...' : ''}</div>` : ''}
+                                </div>
+                            `;
+                        }
+                    });
+                    
+                    html += '</div></div>';
+                } else {
+                    // Try to load images separately if not included
+                    try {
+                        const imagesResponse = await fetch(`${API_BASE}/api/v1/viewpoint/${viewpointId}/images`);
+                        if (imagesResponse.ok) {
+                            const imagesData = await imagesResponse.json();
+                            if (imagesData.images && imagesData.images.length > 0) {
+                                html += '<div class="detail-section"><h3>Images</h3>';
+                                html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">';
+                                
+                                imagesData.images.forEach(asset => {
+                                    if (asset.has_image) {
+                                        const imageUrl = `${API_BASE}/api/v1/image/${asset.id}`;
+                                        html += `
+                                            <div style="border-radius: 8px; overflow: hidden; border: 2px solid #e0e0e0;">
+                                                <img src="${imageUrl}" 
+                                                     alt="${asset.caption || 'Viewpoint image'}" 
+                                                     style="width: 100%; height: 200px; object-fit: cover; cursor: pointer;"
+                                                     onclick="window.open('${imageUrl}', '_blank')"
+                                                     onerror="this.style.display='none'">
+                                                ${asset.caption ? `<div style="padding: 8px; font-size: 0.85rem; color: #666;">${asset.caption.substring(0, 50)}${asset.caption.length > 50 ? '...' : ''}</div>` : ''}
+                                            </div>
+                                        `;
+                                    }
+                                });
+                                
+                                html += '</div></div>';
+                            }
+                        }
+                    } catch (e) {
+                        console.log('Could not load images:', e);
+                    }
+                }
+
                 content.innerHTML = html;
 
             } catch (error) {
@@ -905,7 +1049,116 @@
         }
 
         // Check health on page load
-        window.addEventListener('load', checkServerHealth);
+        window.addEventListener('load', function() {
+            checkServerHealth();
+            // Initialize map after page loads
+            setTimeout(initMap, 500);
+        });
+
+        // Initialize map
+        function initMap() {
+            if (map) {
+                map.remove();
+            }
+            
+            // Create map centered on world
+            map = L.map('map').setView([20, 0], 2);
+            
+            // Add OpenStreetMap tile layer
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors',
+                maxZoom: 19
+            }).addTo(map);
+            
+            // Load viewpoints
+            loadMap();
+        }
+
+
+        // Load viewpoints and display on map (optimized for performance)
+        async function loadMap() {
+            const mapStats = document.getElementById('mapStats');
+            
+            // Clear existing markers efficiently
+            if (map && mapMarkers.length > 0) {
+                const group = L.layerGroup(mapMarkers);
+                map.removeLayer(group);
+            }
+            mapMarkers = [];
+            
+            mapStats.textContent = 'Loading viewpoints...';
+            
+            try {
+                const limit = document.getElementById('mapLimit').value;
+                const url = limit ? `${API_BASE}/api/v1/viewpoints/map?limit=${limit}` : `${API_BASE}/api/v1/viewpoints/map`;
+                
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                const viewpoints = data.viewpoints;
+                
+                mapStats.textContent = `Rendering ${viewpoints.length} viewpoints...`;
+                
+                // Use CircleMarker for better performance (lighter than regular markers)
+                let bounds = [];
+                let batch = [];
+                const BATCH_SIZE = 200;
+                
+                for (let index = 0; index < viewpoints.length; index++) {
+                    const viewpoint = viewpoints[index];
+                    const lat = viewpoint.lat;
+                    const lng = viewpoint.lng;
+                    
+                    if (lat && lng && !isNaN(lat) && !isNaN(lng)) {
+                        // Create lightweight circle marker
+                        const marker = L.circleMarker([lat, lng], {
+                            radius: 5,
+                            fillColor: '#667eea',
+                            color: '#fff',
+                            weight: 1,
+                            opacity: 0.8,
+                            fillOpacity: 0.6
+                        });
+                        
+                        // Simple popup - load details on click
+                        marker.bindPopup(`<strong>${viewpoint.n}</strong><br><button onclick="showViewpointDetail(${viewpoint.id})" style="margin-top: 5px; padding: 5px 10px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer;">View Details</button>`, {
+                            maxWidth: 200
+                        });
+                        
+                        batch.push(marker);
+                        bounds.push([lat, lng]);
+                        
+                        // Add markers in batches for better performance
+                        if (batch.length >= BATCH_SIZE || index === viewpoints.length - 1) {
+                            const batchGroup = L.layerGroup(batch);
+                            batchGroup.addTo(map);
+                            mapMarkers.push(...batch);
+                            batch = [];
+                            
+                            // Use requestAnimationFrame to avoid blocking UI
+                            if (index < viewpoints.length - 1) {
+                                await new Promise(resolve => requestAnimationFrame(resolve));
+                            }
+                        }
+                    }
+                }
+                
+                // Fit map to show all markers
+                if (bounds.length > 0) {
+                    map.fitBounds(bounds, { padding: [50, 50], maxZoom: 10 });
+                }
+                
+                // Update stats
+                mapStats.textContent = `Displaying ${viewpoints.length} viewpoints on map`;
+                
+            } catch (error) {
+                console.error('Error loading map:', error);
+                mapStats.textContent = `Error loading viewpoints: ${error.message}`;
+            }
+        }
     </script>
 </body>
 </html>

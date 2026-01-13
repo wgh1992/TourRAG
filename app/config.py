@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     # MCP
     MCP_SERVER_URL: str = "http://localhost:8001"
     
+    # Google Maps API (for satellite image fallback)
+    GOOGLE_MAPS_API_KEY: Optional[str] = None
+    
     # Application
     APP_NAME: str = "TourRAG"
     APP_VERSION: str = "1.0.0"

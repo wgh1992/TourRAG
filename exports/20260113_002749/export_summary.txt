@@ -1,0 +1,15 @@
+Database Export Summary
+================================================================================
+Export time: 2026-01-13T00:27:50.552471
+Format: both
+Tables exported: 8
+
+Tables:
+  - query_log: 17 rows
+  - spatial_ref_sys: 8500 rows
+  - tag_schema_version: 1 rows
+  - viewpoint_commons_assets: 0 rows
+  - viewpoint_entity: 8451 rows
+  - viewpoint_visual_tags: 0 rows
+  - viewpoint_wiki: 8451 rows
+  - viewpoint_wikidata: 8451 rows

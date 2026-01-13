@@ -59,12 +59,12 @@ Web UI 功能：
 使用测试脚本快速验证搜索功能：
 
 ```bash
-# 使用默认查询测试
-python test_search.py
+# 运行完整API测试套件
+python test_api.py
 
-# 使用自定义查询测试
-python test_search.py "Mount Fuji in winter"
-python test_search.py "春天的樱花寺庙"
+# 测试Agent查询
+python test_agent.py "Mount Fuji in winter"
+python test_agent.py "春天的樱花寺庙"
 ```
 
 测试脚本会显示：

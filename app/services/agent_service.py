@@ -87,7 +87,7 @@ class AgentService:
                 "type": "function",
                 "function": {
                     "name": "search_by_category",
-                    "description": "Search viewpoints by category using SQL. Categories: mountain, lake, temple, museum, park, coast, cityscape, monument, bridge, palace, tower, cave, waterfall, valley, island.",
+                    "description": "Search viewpoints by category using SQL. Categories: mountain, lake, temple, museum, park, coast, cityscape, monument, bridge, palace, tower, cave, waterfall, valley, island. If the query intent includes a country (geo_hints.country), ALWAYS use the country parameter to filter results.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -95,6 +95,10 @@ class AgentService:
                                 "type": "string",
                                 "enum": ["mountain", "lake", "temple", "museum", "park", "coast", "cityscape", "monument", "bridge", "palace", "tower", "cave", "waterfall", "valley", "island"],
                                 "description": "Category to search for"
+                            },
+                            "country": {
+                                "type": "string",
+                                "description": "Optional country name to filter results (e.g., 'China', 'France', 'United States'). Use this when the user query mentions a specific country or location. Common country names: China, United States, France, Italy, Japan, etc."
                             },
                             "top_n": {
                                 "type": "integer",
@@ -132,6 +136,52 @@ class AgentService:
                             }
                         },
                         "required": ["tags"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_with_llm_sql",
+                    "description": "Search viewpoints using LLM-generated SQL query. This is a flexible search method that uses AI to generate optimized SQL queries based on query intent. Use this for complex queries that combine multiple criteria (name, category, tags, country, season). The LLM will generate the most appropriate SQL query automatically.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query_intent": {
+                                "type": "object",
+                                "description": "Query intent object from extract_query_intent. Should include name_candidates, query_tags, season_hint, and geo_hints.",
+                                "properties": {
+                                    "name_candidates": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "List of place names to search for"
+                                    },
+                                    "query_tags": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "List of category or visual tags"
+                                    },
+                                    "season_hint": {
+                                        "type": "string",
+                                        "enum": ["spring", "summer", "autumn", "winter", "unknown"],
+                                        "description": "Season preference"
+                                    },
+                                    "geo_hints": {
+                                        "type": "object",
+                                        "properties": {
+                                            "place_name": {"type": "string"},
+                                            "country": {"type": "string"}
+                                        }
+                                    }
+                                }
+                            },
+                            "top_n": {
+                                "type": "integer",
+                                "description": "Maximum number of results to return",
+                                "default": 50
+                            }
+                        },
+                        "required": ["query_intent"]
                     }
                 }
             },
@@ -303,25 +353,32 @@ Your job is to help users find information about tourist attractions and viewpoi
 
 You have access to SQL-based MCP tools:
 1. extract_query_intent - Extract structured intent from user text (use this first)
-2. search_by_name - Search by place name using SQL (e.g., "Mount Fuji", "Tokyo")
-3. search_by_category - Search by category using SQL (mountain, lake, temple, etc.)
-4. search_by_tags - Search by visual tags using SQL (snow_peak, cherry_blossom, etc.)
-5. search_popular - Get popular viewpoints using SQL
-6. get_viewpoint_details - Get detailed info about a specific viewpoint
-7. rank_and_explain_results - Rank and explain search results
+2. search_with_llm_sql - **NEW**: Search using LLM-generated SQL (recommended for complex queries)
+3. search_by_name - Search by place name using SQL (e.g., "Mount Fuji", "Tokyo", "西湖")
+4. search_by_category - Search by category using SQL (mountain, lake, temple, etc.)
+5. search_by_tags - Search by visual tags using SQL (snow_peak, cherry_blossom, etc.)
+6. search_popular - Get popular viewpoints using SQL (ONLY use as fallback if user explicitly asks for popular places)
+7. get_viewpoint_details - Get detailed info about a specific viewpoint
+8. rank_and_explain_results - Rank and explain search results
 
 Use these SQL-based tools strategically:
 1. First, extract query intent to understand what the user wants
-2. Based on intent, use appropriate SQL search tools:
-   - If name_candidates exist → use search_by_name
-   - If query_tags include categories → use search_by_category
-   - If query_tags include visual tags → use search_by_tags
-   - If season_hint is provided → include it in search_by_tags
-3. Get details for promising candidates (use get_viewpoint_details)
-4. Rank and explain results (use rank_and_explain_results)
-5. Synthesize a helpful answer
+2. **PREFERRED**: For complex queries that combine multiple criteria (name + category + country + season), use search_with_llm_sql. This tool uses AI to generate optimized SQL queries automatically.
+3. For simpler queries, use specific tools:
+   - If only name_candidates exist → use search_by_name
+   - If only categories → use search_by_category
+     **CRITICAL: If geo_hints.country is present in query_intent, ALWAYS pass the country parameter to search_by_category**
+   - If only visual tags → use search_by_tags
+4. IMPORTANT: If search_by_name returns 0 results (check the "count" field), DO NOT fall back to search_popular. Instead, inform the user that the location was not found in the database.
+5. IMPORTANT: When user query mentions a country (e.g., "纪念中国" means "commemorating China"), you MUST use the country parameter in search_by_category to filter results by that country.
+6. Get details for promising candidates (use get_viewpoint_details)
+7. Rank and explain results (use rank_and_explain_results)
+8. Synthesize a helpful answer
 
-Be strategic: Use SQL tools to find relevant viewpoints, then enrich with details."""
+CRITICAL RULES:
+- Never use search_popular as a fallback when a specific location search returns no results
+- Always check the "count" field in search results. If count is 0, inform the user that the location was not found
+- ALWAYS use the country parameter when geo_hints.country is present in query_intent"""
             },
             {
                 "role": "user",
@@ -410,8 +467,9 @@ Be strategic: Use SQL tools to find relevant viewpoints, then enrich with detail
         
         elif function_name == "search_by_category":
             category = arguments.get("category")
+            country = arguments.get("country")  # Support country filter
             top_n = arguments.get("top_n", 50)
-            result = self.sql_search.search_by_category(category, top_n)
+            result = self.sql_search.search_by_category(category, country=country, top_n=top_n)
             return result
         
         elif function_name == "search_by_tags":
@@ -419,6 +477,30 @@ Be strategic: Use SQL tools to find relevant viewpoints, then enrich with detail
             season = arguments.get("season", "unknown")
             top_n = arguments.get("top_n", 50)
             result = self.sql_search.search_by_tags(tags, season, top_n)
+            return result
+        
+        elif function_name == "search_with_llm_sql":
+            from app.schemas.query import QueryIntent, GeoHints
+            query_intent_dict = arguments.get("query_intent", {})
+            top_n = arguments.get("top_n", 50)
+            
+            # Convert dict to QueryIntent object
+            geo_hints_dict = query_intent_dict.get("geo_hints", {})
+            geo_hints = GeoHints(
+                place_name=geo_hints_dict.get("place_name"),
+                country=geo_hints_dict.get("country")
+            ) if geo_hints_dict else None
+            
+            query_intent = QueryIntent(
+                name_candidates=query_intent_dict.get("name_candidates", []),
+                query_tags=query_intent_dict.get("query_tags", []),
+                season_hint=query_intent_dict.get("season_hint", "unknown"),
+                scene_hints=query_intent_dict.get("scene_hints", []),
+                geo_hints=geo_hints,
+                confidence_notes=query_intent_dict.get("confidence_notes", [])
+            )
+            
+            result = self.sql_search.search_with_llm_sql(query_intent, top_n)
             return result
         
         elif function_name == "search_popular":
