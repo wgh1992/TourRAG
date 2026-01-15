@@ -15,31 +15,55 @@ from app.config import settings
 def init_database():
     """Run database migrations"""
     print(f"Connecting to database: {settings.DATABASE_URL.split('@')[-1]}")
-    
+
     # Read migration file
     migration_file = Path(__file__).parent.parent / "migrations" / "001_initial_schema.sql"
-    
-    if not migration_file.exists():
-        print(f"Error: Migration file not found: {migration_file}")
+
+    try:
+        with db.get_connection() as conn:
+            with conn.cursor() as cursor:
+                if not migration_file.exists():
+                    # If schema already exists, just register tag schema and exit
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM information_schema.tables
+                        WHERE table_schema = 'public'
+                          AND table_name IN (
+                            'viewpoint_entity',
+                            'viewpoint_visual_tags',
+                            'viewpoint_wiki',
+                            'tag_schema_version'
+                          )
+                    """)
+                    existing_tables = cursor.fetchone()[0]
+                    if existing_tables >= 3:
+                        print(f"⚠️  Migration file not found: {migration_file}")
+                        print("   Detected existing schema, skipping schema migration")
+                        migration_sql = None
+                    else:
+                        print(f"Error: Migration file not found: {migration_file}")
+                        return False
+                else:
+                    with open(migration_file, "r", encoding="utf-8") as f:
+                        migration_sql = f.read()
+    except Exception as e:
+        print(f"Error checking database schema: {e}")
         return False
-    
-    with open(migration_file, "r", encoding="utf-8") as f:
-        migration_sql = f.read()
     
     try:
         with db.get_connection() as conn:
             with conn.cursor() as cursor:
-                # Execute migration
-                cursor.execute(migration_sql)
-                print("✓ Database schema created successfully")
-                
+                # Execute migration if available
+                if migration_sql:
+                    cursor.execute(migration_sql)
+                    print("✓ Database schema created successfully")
+
                 # Insert tag schema version
                 tag_schema_file = Path(__file__).parent.parent / "config" / "tags" / f"tag_schema_{settings.TAG_SCHEMA_VERSION}.json"
                 if tag_schema_file.exists():
                     import json
                     with open(tag_schema_file, "r", encoding="utf-8") as f:
                         schema_def = json.load(f)
-                    
+
                     cursor.execute("""
                         INSERT INTO tag_schema_version (version, schema_definition)
                         VALUES (%s, %s)

@@ -55,7 +55,8 @@ python scripts/setup_10000_viewpoints.py --skip-country
 ### 生成脚本
 
 11. **`generate_visual_tags_from_wiki.py`** - 从Wikipedia生成视觉标签
-12. **`generate_viewpoint_distribution_map.py`** - 生成分布图
+12. **`generate_visual_tags_from_images.py`** - 从图像+历史信息生成标签与摘要
+13. **`generate_viewpoint_distribution_map.py`** - 生成分布图
 
 ### 工具脚本
 
@@ -91,6 +92,9 @@ python scripts/manage_viewpoints.py download images --limit 10000
 
 # 步骤4: 生成标签
 python scripts/manage_viewpoints.py generate-tags --limit 10000
+
+# 步骤4.1: 从图像+历史生成标签与摘要（可选）
+python scripts/manage_viewpoints.py generate-image-tags --image-dir exports/images/all_image --limit 10000
 
 # 步骤5: 检查状态
 python scripts/manage_viewpoints.py status

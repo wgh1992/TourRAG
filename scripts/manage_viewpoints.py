@@ -85,7 +85,8 @@ def init_database():
     migrations = [
         "migrations/001_initial_schema.sql",
         "migrations/002_add_image_storage.sql",
-        "migrations/003_add_viewpoint_metadata.sql"
+        "migrations/003_add_viewpoint_metadata.sql",
+        "migrations/004_add_tag_source_gpt_4o_mini_image_history.sql"
     ]
     
     for migration in migrations:
@@ -190,6 +191,33 @@ def generate_visual_tags(limit: Optional[int] = None, dry_run: bool = False):
     
     return run_script("generate_visual_tags_from_wiki.py", args,
                      "Generating visual tags from Wikipedia using LLM")
+
+
+def generate_image_visual_tags(image_dir: Optional[str] = None, limit: Optional[int] = None,
+                               dry_run: bool = False, batch_size: int = 50,
+                               sleep: float = 0.1, model: Optional[str] = None):
+    """Generate visual tags and summaries from images + history text"""
+    print_header("Generate Visual Tags from Images")
+
+    args = []
+    if image_dir:
+        args.extend(["--image-dir", image_dir])
+    if limit:
+        args.extend(["--limit", str(limit)])
+    if dry_run:
+        args.append("--dry-run")
+    if batch_size:
+        args.extend(["--batch-size", str(batch_size)])
+    if sleep is not None:
+        args.extend(["--sleep", str(sleep)])
+    if model:
+        args.extend(["--model", model])
+
+    return run_script(
+        "generate_visual_tags_from_images.py",
+        args,
+        "Generating visual tags, season info, and summaries from images + history"
+    )
 
 
 def check_downloaded_images():
@@ -454,6 +482,14 @@ Examples:
     tags_parser = subparsers.add_parser('generate-tags', help='Generate visual tags from Wikipedia')
     tags_parser.add_argument('--limit', type=int, help='Limit number of viewpoints')
     tags_parser.add_argument('--dry-run', action='store_true', help='Dry run without API calls')
+
+    image_tags_parser = subparsers.add_parser('generate-image-tags', help='Generate visual tags from images + history')
+    image_tags_parser.add_argument('--image-dir', type=str, default="exports/images/all_image", help='Image directory')
+    image_tags_parser.add_argument('--limit', type=int, help='Limit number of viewpoints')
+    image_tags_parser.add_argument('--batch-size', type=int, default=50, help='Batch size')
+    image_tags_parser.add_argument('--sleep', type=float, default=0.1, help='Delay between API calls')
+    image_tags_parser.add_argument('--model', type=str, default=None, help='OpenAI model')
+    image_tags_parser.add_argument('--dry-run', action='store_true', help='Dry run without API calls')
     
     # Check commands
     subparsers.add_parser('check-images', help='Check downloaded images')
@@ -533,6 +569,16 @@ Examples:
         success = generate_visual_tags(
             limit=getattr(args, 'limit', None),
             dry_run=getattr(args, 'dry_run', False)
+        )
+
+    elif args.command == 'generate-image-tags':
+        success = generate_image_visual_tags(
+            image_dir=getattr(args, 'image_dir', None),
+            limit=getattr(args, 'limit', None),
+            dry_run=getattr(args, 'dry_run', False),
+            batch_size=getattr(args, 'batch_size', 50),
+            sleep=getattr(args, 'sleep', 0.1),
+            model=getattr(args, 'model', None)
         )
     
     elif args.command == 'check-images':

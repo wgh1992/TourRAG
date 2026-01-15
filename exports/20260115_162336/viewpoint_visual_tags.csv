@@ -1,0 +1,12 @@
+id,viewpoint_id,season,tags,confidence,evidence,tag_source,updated_at,created_at
+25664,62323,unknown,"[""attraction""]",0.5,"{""history_source"": ""sections"", ""visual_evidence"": ""aerial view of the city layout""}",wiki_weak_supervision,2026-01-15 15:42:53.946788+11:00,2026-01-15 15:42:53.946788+11:00
+25665,62324,winter,"[""snow_peak"", ""ice"", ""attraction""]",0.9,"{""history_source"": ""name_inference"", ""visual_evidence"": ""snow-covered mountain landscape""}",wiki_weak_supervision,2026-01-15 15:42:59.063702+11:00,2026-01-15 15:42:59.063702+11:00
+25666,62325,unknown,"[""attraction""]",0.5,"{""history_source"": ""sections"", ""visual_evidence"": ""aerial view of a town surrounded by natural landscapes""}",wiki_weak_supervision,2026-01-15 15:43:04.891706+11:00,2026-01-15 15:43:04.891706+11:00
+25667,62326,unknown,"[""attraction""]",0.5,"{""history_source"": ""name_inference"", ""visual_evidence"": ""aerial view of a landscape with urban and rural elements""}",wiki_weak_supervision,2026-01-15 15:43:11.830797+11:00,2026-01-15 15:43:11.830797+11:00
+25668,62327,unknown,"[""sunny"", ""attraction""]",0.5,"{""history_source"": ""sections"", ""visual_evidence"": ""aerial view of a densely populated area with greenery""}",wiki_weak_supervision,2026-01-15 15:43:18.287142+11:00,2026-01-15 15:43:18.287142+11:00
+25670,62324,winter,"[""snowy""]",0.9,{},gpt_4o_mini_image_history,2026-01-15 16:14:07.378024+11:00,2026-01-15 15:55:02.332421+11:00
+25669,62323,unknown,[],0.0,{},gpt_4o_mini_image_history,2026-01-15 16:18:49.085486+11:00,2026-01-15 15:54:57.547376+11:00
+25680,62324,unknown,"[""snow_peak""]",0.0,{},gpt_4o_mini_image_history,2026-01-15 16:18:53.003281+11:00,2026-01-15 16:18:53.003281+11:00
+25671,62325,unknown,[],0.5,{},gpt_4o_mini_image_history,2026-01-15 16:18:58.806431+11:00,2026-01-15 15:55:08.075446+11:00
+25672,62326,unknown,[],0.5,{},gpt_4o_mini_image_history,2026-01-15 16:19:04.363180+11:00,2026-01-15 15:55:13.401777+11:00
+25673,62327,unknown,[],0.5,{},gpt_4o_mini_image_history,2026-01-15 16:19:10.835299+11:00,2026-01-15 15:55:19.565062+11:00
