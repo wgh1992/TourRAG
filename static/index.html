@@ -353,6 +353,49 @@
             font-style: italic;
         }
 
+        .satellite-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .satellite-item {
+            border-radius: 8px;
+            overflow: hidden;
+            border: 2px solid #e0e0e0;
+            background: #fafafa;
+        }
+
+        .satellite-wrapper {
+            position: relative;
+            width: 100%;
+            height: 200px;
+        }
+
+        .satellite-wrapper img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .satellite-overlay {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        .satellite-caption {
+            padding: 8px;
+            font-size: 0.85rem;
+            color: #666;
+            border-top: 1px solid #e0e0e0;
+            background: #fff;
+        }
+
         .detail-modal {
             display: none;
             position: fixed;
@@ -611,6 +654,17 @@
 
         <div class="error-message" id="errorMessage"></div>
 
+        <div class="results-container" id="resultsContainer">
+            <div class="results-header">
+                <h2>Search Results</h2>
+                <div class="results-meta" id="resultsMeta"></div>
+            </div>
+
+            <div class="query-intent" id="queryIntent"></div>
+
+            <div class="candidates-list" id="candidatesList"></div>
+        </div>
+
         <div class="map-container" id="mapContainer">
             <div class="map-header">
                 <h2>🌍 Viewpoints Map</h2>
@@ -626,17 +680,6 @@
             </div>
             <div id="map"></div>
             <div class="map-stats" id="mapStats">Loading viewpoints...</div>
-        </div>
-
-        <div class="results-container" id="resultsContainer">
-            <div class="results-header">
-                <h2>Search Results</h2>
-                <div class="results-meta" id="resultsMeta"></div>
-            </div>
-
-            <div class="query-intent" id="queryIntent"></div>
-
-            <div class="candidates-list" id="candidatesList"></div>
         </div>
     </div>
 
@@ -781,6 +824,93 @@
             return new Blob([u8arr], {type:mime});
         }
 
+        function normalizeBboxFromPolygon(polygonCoords) {
+            if (!Array.isArray(polygonCoords) || polygonCoords.length < 3) {
+                return null;
+            }
+            const xCoords = polygonCoords.map(coord => coord[0]).filter(Number.isFinite);
+            const yCoords = polygonCoords.map(coord => coord[1]).filter(Number.isFinite);
+            if (xCoords.length === 0 || yCoords.length === 0) {
+                return null;
+            }
+            return [
+                Math.min(...xCoords),
+                Math.min(...yCoords),
+                Math.max(...xCoords),
+                Math.max(...yCoords)
+            ];
+        }
+
+        function parseNormalizedData(value) {
+            if (!value) {
+                return null;
+            }
+            try {
+                return JSON.parse(decodeURIComponent(value));
+            } catch (error) {
+                return null;
+            }
+        }
+
+        function drawBboxOverlay(imgEl, canvasEl) {
+            if (!imgEl || !canvasEl) {
+                return;
+            }
+            const bboxData = parseNormalizedData(imgEl.dataset.bbox);
+            const polygonData = parseNormalizedData(imgEl.dataset.polygon);
+            const bboxNormalized = bboxData || normalizeBboxFromPolygon(polygonData);
+            if (!bboxNormalized || bboxNormalized.length !== 4) {
+                return;
+            }
+
+            const rect = imgEl.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) {
+                return;
+            }
+
+            canvasEl.width = rect.width;
+            canvasEl.height = rect.height;
+
+            const ctx = canvasEl.getContext('2d');
+            ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+            ctx.strokeStyle = '#ff7a00';
+            ctx.lineWidth = 3;
+
+            const x = bboxNormalized[0] * rect.width;
+            const y = bboxNormalized[1] * rect.height;
+            const w = (bboxNormalized[2] - bboxNormalized[0]) * rect.width;
+            const h = (bboxNormalized[3] - bboxNormalized[1]) * rect.height;
+
+            ctx.strokeRect(x, y, w, h);
+        }
+
+        function renderSatelliteOverlays(container) {
+            if (!container) {
+                return;
+            }
+            const items = container.querySelectorAll('.satellite-wrapper');
+            items.forEach(wrapper => {
+                const img = wrapper.querySelector('img');
+                const canvas = wrapper.querySelector('canvas');
+                if (!img || !canvas) {
+                    return;
+                }
+
+                const draw = () => drawBboxOverlay(img, canvas);
+                img.addEventListener('load', draw);
+                if (img.complete) {
+                    draw();
+                }
+
+                if (typeof ResizeObserver !== 'undefined') {
+                    const observer = new ResizeObserver(() => drawBboxOverlay(img, canvas));
+                    observer.observe(wrapper);
+                } else {
+                    window.addEventListener('resize', draw);
+                }
+            });
+        }
+
         function displayResults(data) {
             const resultsContainer = document.getElementById('resultsContainer');
             const resultsMeta = document.getElementById('resultsMeta');
@@ -899,11 +1029,12 @@
                     html += `<p style="color: #666; margin-bottom: 20px;">${data.category_norm}</p>`;
                 }
 
-                if (data.wikipedia && data.wikipedia.extract_text) {
+                const aboutText = data.wikipedia?.extract_text || data.wikipedia?.extract;
+                if (aboutText) {
                     html += `
                         <div class="detail-section">
                             <h3>About</h3>
-                            <p>${data.wikipedia.extract_text.substring(0, 500)}...</p>
+                            <p>${aboutText.substring(0, 500)}...</p>
                         </div>
                     `;
                 }
@@ -930,36 +1061,103 @@
                     `;
                 }
 
-                if (data.wikidata && data.wikidata.claims) {
+                if (data.historical_evidence && data.historical_evidence.length > 0) {
+                    html += `
+                        <div class="detail-section">
+                            <h3>History Details</h3>
+                            <div style="display: grid; gap: 10px;">
+                                ${data.historical_evidence.map(e => `
+                                    <div style="padding: 10px; background: #f8f9fa; border-radius: 8px;">
+                                        <div style="font-weight: 600; color: #555;">${e.source || 'source'}</div>
+                                        ${e.reference ? `<div style="font-size: 0.85rem; color: #888;">${e.reference}</div>` : ''}
+                                        ${e.text ? `<div style="margin-top: 6px; color: #666;">${e.text}</div>` : ''}
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                const satelliteImages = data.satellite_images || [];
+                if (satelliteImages.length > 0) {
+                    html += `
+                        <div class="detail-section">
+                            <h3>Satellite Images</h3>
+                            <div class="satellite-grid">
+                                ${satelliteImages.map(image => {
+                                    const imageUrl = image.url
+                                        ? (image.url.startsWith('http') ? image.url : `${API_BASE}${image.url}`)
+                                        : '';
+                                    const bboxValue = image.bbox_normalized || image.geo_bbox_normalized || null;
+                                    const polygonValue = image.polygon_normalized_coords || image.polygon_normalized || null;
+                                    const bboxAttr = bboxValue ? ` data-bbox="${encodeURIComponent(JSON.stringify(bboxValue))}"` : '';
+                                    const polygonAttr = polygonValue ? ` data-polygon="${encodeURIComponent(JSON.stringify(polygonValue))}"` : '';
+                                    const caption = image.caption || image.label || image.filename || 'Satellite image';
+                                    return `
+                                        <div class="satellite-item">
+                                            <div class="satellite-wrapper">
+                                                <img src="${imageUrl}" alt="${caption}"${bboxAttr}${polygonAttr}>
+                                                <canvas class="satellite-overlay"></canvas>
+                                            </div>
+                                            <div class="satellite-caption">${caption}</div>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                const wikidataQid = data.wikidata?.wikidata_qid || data.wikidata?.qid;
+                if (data.wikidata && wikidataQid) {
                     html += `
                         <div class="detail-section">
                             <h3>Additional Information</h3>
-                            <p>Wikidata QID: ${data.wikidata.wikidata_qid}</p>
+                            <p>Wikidata QID: ${wikidataQid}</p>
                         </div>
                     `;
                 }
 
                 // Load and display images
-                if (data.commons_assets && data.commons_assets.length > 0) {
+                const commonsImages = (data.commons_assets || []).filter(asset => asset.has_image);
+                const localImages = data.local_images || [];
+                if (commonsImages.length > 0) {
                     html += '<div class="detail-section"><h3>Images</h3>';
                     html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">';
                     
-                    data.commons_assets.forEach(asset => {
-                        if (asset.has_image) {
-                            const imageUrl = `${API_BASE}/api/v1/image/${asset.id}`;
-                            html += `
-                                <div style="border-radius: 8px; overflow: hidden; border: 2px solid #e0e0e0;">
-                                    <img src="${imageUrl}" 
-                                         alt="${asset.caption || 'Viewpoint image'}" 
-                                         style="width: 100%; height: 200px; object-fit: cover; cursor: pointer;"
-                                         onclick="window.open('${imageUrl}', '_blank')"
-                                         onerror="this.style.display='none'">
-                                    ${asset.caption ? `<div style="padding: 8px; font-size: 0.85rem; color: #666;">${asset.caption.substring(0, 50)}${asset.caption.length > 50 ? '...' : ''}</div>` : ''}
-                                </div>
-                            `;
-                        }
+                    commonsImages.forEach(asset => {
+                        const imageUrl = `${API_BASE}/api/v1/image/${asset.id}`;
+                        html += `
+                            <div style="border-radius: 8px; overflow: hidden; border: 2px solid #e0e0e0;">
+                                <img src="${imageUrl}" 
+                                     alt="${asset.caption || 'Viewpoint image'}" 
+                                     style="width: 100%; height: 200px; object-fit: cover; cursor: pointer;"
+                                     onclick="window.open('${imageUrl}', '_blank')"
+                                     onerror="this.style.display='none'">
+                                ${asset.caption ? `<div style="padding: 8px; font-size: 0.85rem; color: #666;">${asset.caption.substring(0, 50)}${asset.caption.length > 50 ? '...' : ''}</div>` : ''}
+                            </div>
+                        `;
                     });
                     
+                    html += '</div></div>';
+                } else if (localImages.length > 0) {
+                    html += '<div class="detail-section"><h3>Images</h3>';
+                    html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">';
+
+                    localImages.forEach(image => {
+                        const imageUrl = `${API_BASE}${image.url}`;
+                        html += `
+                            <div style="border-radius: 8px; overflow: hidden; border: 2px solid #e0e0e0;">
+                                <img src="${imageUrl}" 
+                                     alt="Viewpoint image" 
+                                     style="width: 100%; height: 200px; object-fit: cover; cursor: pointer;"
+                                     onclick="window.open('${imageUrl}', '_blank')"
+                                     onerror="this.style.display='none'">
+                                <div style="padding: 8px; font-size: 0.85rem; color: #666;">${image.filename}</div>
+                            </div>
+                        `;
+                    });
+
                     html += '</div></div>';
                 } else {
                     // Try to load images separately if not included
@@ -967,27 +1165,52 @@
                         const imagesResponse = await fetch(`${API_BASE}/api/v1/viewpoint/${viewpointId}/images`);
                         if (imagesResponse.ok) {
                             const imagesData = await imagesResponse.json();
-                            if (imagesData.images && imagesData.images.length > 0) {
+                            const fetchedCommons = (imagesData.images || []).filter(asset => asset.has_image);
+                            if (fetchedCommons.length > 0) {
                                 html += '<div class="detail-section"><h3>Images</h3>';
                                 html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">';
                                 
-                                imagesData.images.forEach(asset => {
-                                    if (asset.has_image) {
-                                        const imageUrl = `${API_BASE}/api/v1/image/${asset.id}`;
-                                        html += `
-                                            <div style="border-radius: 8px; overflow: hidden; border: 2px solid #e0e0e0;">
-                                                <img src="${imageUrl}" 
-                                                     alt="${asset.caption || 'Viewpoint image'}" 
-                                                     style="width: 100%; height: 200px; object-fit: cover; cursor: pointer;"
-                                                     onclick="window.open('${imageUrl}', '_blank')"
-                                                     onerror="this.style.display='none'">
-                                                ${asset.caption ? `<div style="padding: 8px; font-size: 0.85rem; color: #666;">${asset.caption.substring(0, 50)}${asset.caption.length > 50 ? '...' : ''}</div>` : ''}
-                                            </div>
-                                        `;
-                                    }
+                                fetchedCommons.forEach(asset => {
+                                    const imageUrl = `${API_BASE}/api/v1/image/${asset.id}`;
+                                    html += `
+                                        <div style="border-radius: 8px; overflow: hidden; border: 2px solid #e0e0e0;">
+                                            <img src="${imageUrl}" 
+                                                 alt="${asset.caption || 'Viewpoint image'}" 
+                                                 style="width: 100%; height: 200px; object-fit: cover; cursor: pointer;"
+                                                 onclick="window.open('${imageUrl}', '_blank')"
+                                                 onerror="this.style.display='none'">
+                                            ${asset.caption ? `<div style="padding: 8px; font-size: 0.85rem; color: #666;">${asset.caption.substring(0, 50)}${asset.caption.length > 50 ? '...' : ''}</div>` : ''}
+                                        </div>
+                                    `;
                                 });
                                 
                                 html += '</div></div>';
+                            }
+                        }
+                        if (!html.includes('<h3>Images</h3>')) {
+                            const localImagesResponse = await fetch(`${API_BASE}/api/v1/viewpoint/${viewpointId}/local-images`);
+                            if (localImagesResponse.ok) {
+                                const localImagesData = await localImagesResponse.json();
+                                if (localImagesData.images && localImagesData.images.length > 0) {
+                                    html += '<div class="detail-section"><h3>Images</h3>';
+                                    html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">';
+
+                                    localImagesData.images.forEach(image => {
+                                        const imageUrl = `${API_BASE}${image.url}`;
+                                        html += `
+                                            <div style="border-radius: 8px; overflow: hidden; border: 2px solid #e0e0e0;">
+                                                <img src="${imageUrl}" 
+                                                     alt="Viewpoint image" 
+                                                     style="width: 100%; height: 200px; object-fit: cover; cursor: pointer;"
+                                                     onclick="window.open('${imageUrl}', '_blank')"
+                                                     onerror="this.style.display='none'">
+                                                <div style="padding: 8px; font-size: 0.85rem; color: #666;">${image.filename}</div>
+                                            </div>
+                                        `;
+                                    });
+
+                                    html += '</div></div>';
+                                }
                             }
                         }
                     } catch (e) {
@@ -996,6 +1219,7 @@
                 }
 
                 content.innerHTML = html;
+                renderSatelliteOverlays(content);
 
             } catch (error) {
                 content.innerHTML = `

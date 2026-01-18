@@ -42,10 +42,12 @@ class EnrichmentService:
             
             row = cursor.fetchone()
             if row:
+                extract_text = row['extract_text']
                 return {
                     "title": row['wikipedia_title'],
                     "lang": row['wikipedia_lang'],
-                    "extract": row['extract_text'],
+                    "extract": extract_text,
+                    "extract_text": extract_text,
                     "sections": row['sections'] or [],
                     "citations": row['citations'] or []
                 }
@@ -73,8 +75,10 @@ class EnrichmentService:
             
             row = cursor.fetchone()
             if row:
+                qid = row['wikidata_qid']
                 return {
-                    "qid": row['wikidata_qid'],
+                    "qid": qid,
+                    "wikidata_qid": qid,
                     "claims": row['claims'] or {},
                     "sitelinks_count": row['sitelinks_count']
                 }
@@ -289,7 +293,29 @@ class EnrichmentService:
                     ))
             
             return summary, evidence_list
-        
+
+        # Fallback to AI-generated history summary if Wikipedia extract is missing
+        with db.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT 
+                    history_summary,
+                    source,
+                    updated_at
+                FROM viewpoint_ai_summaries
+                WHERE viewpoint_id = %s
+                ORDER BY updated_at DESC NULLS LAST
+                LIMIT 1
+            """, (viewpoint_id,))
+            row = cursor.fetchone()
+            if row and row.get('history_summary'):
+                summary = row['history_summary']
+                evidence_list.append(Evidence(
+                    source="ai_summary",
+                    reference=row.get('source') or 'viewpoint_ai_summaries',
+                    text=summary[:200] + "..." if len(summary) > 200 else summary
+                ))
+                return summary, evidence_list
+
         return None, evidence_list
 
 

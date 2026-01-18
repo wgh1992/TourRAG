@@ -373,29 +373,12 @@ IMPORTANT INSTRUCTIONS:
             # Count parameter placeholders in SQL
             param_count = sql.count('%s')
             
-            # If parameter count doesn't match, log warning and adjust
-            # The LLM should generate correct SQL, but we handle mismatches gracefully
+            # If parameter count doesn't match, fail fast and let fallback handle it
             if len(params) != param_count:
                 print(f"[SQLSearchTool] Warning: Parameter count mismatch. SQL has {param_count} placeholders, but we have {len(params)} parameters.")
                 print(f"[SQLSearchTool] SQL preview: {sql[:300]}...")
                 print(f"[SQLSearchTool] Expected params: {params}")
-                
-                # Try to pad or trim params to match (this is a workaround)
-                # In production, we'd want better error handling
-                if len(params) < param_count:
-                    # Pad with None - this will likely cause the query to fail, but fallback will handle it
-                    # We don't try to guess missing params as it's error-prone
-                    missing_count = param_count - len(params)
-                    print(f"[SQLSearchTool] Padding {missing_count} missing parameters with None")
-                    params.extend([None] * missing_count)
-                elif len(params) > param_count:
-                    # Trim params (keep first param_count, but preserve top_n at the end if possible)
-                    # Make sure top_n is included
-                    if len(params) > 0 and params[-1] == top_n and param_count > 0:
-                        # Keep top_n and trim from middle
-                        params = params[:param_count-1] + [top_n]
-                    else:
-                        params = params[:param_count]
+                raise ValueError("LLM SQL parameter count mismatch")
             
             return sql, params
             
@@ -777,6 +760,19 @@ IMPORTANT INSTRUCTIONS:
                 cursor.execute(sql, params)
                 rows = cursor.fetchall()
         
+        # If still no results, try matching category in visual tags
+        if len(rows) == 0:
+            tags_result = self.search_by_tags([category], season=None, top_n=top_n)
+            if tags_result.get("count", 0) > 0:
+                tags_result["warning"] = (
+                    f"No {category} viewpoints found in category_norm. "
+                    f"Showing results matched from visual tags instead."
+                )
+                tags_result["suggestion"] = (
+                    "These results were matched by tags, not by normalized category."
+                )
+                return tags_result
+        
         candidates = []
         for row in rows:
             candidates.append(ViewpointCandidate(
@@ -830,10 +826,101 @@ IMPORTANT INSTRUCTIONS:
         
         return result
     
+    def search_by_history_terms(
+        self,
+        terms: List[str],
+        top_n: int = 50
+    ) -> Dict[str, Any]:
+        """
+        Search viewpoints by matching terms in historical/Wikipedia text.
+        
+        Args:
+            terms: List of keywords or phrases to search in viewpoint_wiki.extract_text
+            top_n: Maximum number of results
+            
+        Returns:
+            Dict with candidates and SQL query info
+        """
+        if not terms:
+            return {
+                "candidates": [],
+                "count": 0,
+                "warning": "No history terms provided for search.",
+                "suggestion": "Provide at least one keyword or phrase to search in history text."
+            }
+        
+        normalized_terms = [t.strip() for t in terms if t and t.strip()]
+        if not normalized_terms:
+            return {
+                "candidates": [],
+                "count": 0,
+                "warning": "All history terms were empty after normalization.",
+                "suggestion": "Provide non-empty keywords or phrases to search in history text."
+            }
+        
+        # Build SQL with OR conditions and a simple match score
+        match_cases = " + ".join(
+            ["CASE WHEN w.extract_text ILIKE %s THEN 1 ELSE 0 END"] * len(normalized_terms)
+        )
+        where_clause = " OR ".join(["w.extract_text ILIKE %s"] * len(normalized_terms))
+        
+        sql = f"""
+        SELECT DISTINCT
+            e.viewpoint_id,
+            e.name_primary,
+            e.name_variants,
+            e.category_norm,
+            e.popularity,
+            LEAST(1.0, ({match_cases})::float / %s) as name_score,
+            1.0 as geo_score,
+            CASE WHEN e.category_norm IS NOT NULL THEN 0.5 ELSE 0.0 END as category_score
+        FROM viewpoint_entity e
+        INNER JOIN viewpoint_wiki w ON e.viewpoint_id = w.viewpoint_id
+        WHERE ({where_clause})
+        ORDER BY name_score DESC, e.popularity DESC NULLS LAST
+        LIMIT %s
+        """
+        
+        params = [f"%{t}%" for t in normalized_terms]
+        params.append(len(normalized_terms))
+        params.extend([f"%{t}%" for t in normalized_terms])
+        params.append(top_n)
+        
+        with db.get_cursor() as cursor:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+        
+        candidates = []
+        for row in rows:
+            candidates.append(ViewpointCandidate(
+                viewpoint_id=row['viewpoint_id'],
+                name_primary=row['name_primary'],
+                name_variants=row.get('name_variants') or {},
+                category_norm=row.get('category_norm'),
+                name_score=float(row.get('name_score', 0.0)),
+                geo_score=float(row.get('geo_score', 1.0)),
+                category_score=float(row.get('category_score', 0.0)),
+                popularity=float(row.get('popularity', 0.0))
+            ))
+        
+        result = {
+            "candidates": [c.model_dump() for c in candidates],
+            "count": len(candidates),
+            "sql": sql,
+            "params": params
+        }
+        
+        if len(candidates) == 0:
+            result["warning"] = "No viewpoints found matching the history terms."
+            result["suggestion"] = "Try different keywords or broaden the history-related terms."
+        
+        return result
+    
     def search_by_tags(
         self,
         tags: List[str],
         season: Optional[str] = None,
+        tag_sources: Optional[List[str]] = None,
         top_n: int = 50
     ) -> Dict[str, Any]:
         """
@@ -842,6 +929,7 @@ IMPORTANT INSTRUCTIONS:
         Args:
             tags: List of visual tags to search for
             season: Optional season filter (spring, summer, autumn, winter)
+            tag_sources: Optional tag sources filter (e.g., wiki_weak_supervision)
             top_n: Maximum number of results
             
         Returns:
@@ -853,17 +941,26 @@ IMPORTANT INSTRUCTIONS:
             'waterfall': 'waterfall',
         }
         
+        valid_categories = [
+            'mountain', 'lake', 'temple', 'museum', 'park',
+            'coast', 'cityscape', 'monument', 'bridge',
+            'palace', 'tower', 'cave', 'waterfall', 'valley', 'island'
+        ]
+        
         category_list = []
         for tag in tags:
+            if tag in valid_categories:
+                category_list.append(tag)
             if tag in visual_to_category:
                 category_list.append(visual_to_category[tag])
         
         # Build SQL query
         conditions = []
         params = []
+        has_tag_filters = bool(tags)
         
-        # Category filter
-        if category_list:
+        # Category filter (only when no tag-based filter is used)
+        if category_list and not has_tag_filters:
             placeholders = ','.join(['%s'] * len(category_list))
             conditions.append(f"category_norm IN ({placeholders})")
             params.extend(category_list)
@@ -877,6 +974,12 @@ IMPORTANT INSTRUCTIONS:
                 tag_params.append(json.dumps([tag]))
             
             if tag_conditions:
+                tag_source_filter = ""
+                if tag_sources:
+                    placeholders = ','.join(['%s'] * len(tag_sources))
+                    tag_source_filter = f"AND tag_source IN ({placeholders})"
+                    tag_params.extend(tag_sources)
+                
                 season_filter = ""
                 if season and season != 'unknown':
                     season_filter = "AND season = %s"
@@ -886,6 +989,7 @@ IMPORTANT INSTRUCTIONS:
                     SELECT DISTINCT viewpoint_id 
                     FROM viewpoint_visual_tags 
                     WHERE {' OR '.join(tag_conditions)}
+                    {tag_source_filter}
                     {season_filter}
                 )""")
                 params.extend(tag_params)
@@ -893,9 +997,11 @@ IMPORTANT INSTRUCTIONS:
         where_clause = " AND ".join(conditions) if conditions else "1=1"
         
         category_score_sql = "0.0"
+        category_score_params: List[str] = []
         if category_list:
             placeholders = ','.join(['%s'] * len(category_list))
             category_score_sql = f"CASE WHEN e.category_norm IN ({placeholders}) THEN 1.0 ELSE 0.0 END"
+            category_score_params.extend(category_list)
         
         sql = f"""
         SELECT DISTINCT
@@ -913,6 +1019,7 @@ IMPORTANT INSTRUCTIONS:
         LIMIT %s
         """
         
+        params = category_score_params + params
         params.append(top_n)
         with db.get_cursor() as cursor:
             cursor.execute(sql, params)

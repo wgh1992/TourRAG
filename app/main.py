@@ -47,6 +47,31 @@ static_dir = Path(__file__).parent.parent / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
+# Local image directory (exports/images/all_image)
+LOCAL_IMAGE_DIR = Path(__file__).parent.parent / "exports" / "images" / "all_image"
+LOCAL_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
+
+
+def _find_local_images(viewpoint_id: int) -> List[Path]:
+    if not LOCAL_IMAGE_DIR.exists():
+        return []
+
+    matches: List[Path] = []
+    for ext in LOCAL_IMAGE_EXTS:
+        direct = LOCAL_IMAGE_DIR / f"{viewpoint_id}{ext}"
+        if direct.exists():
+            matches.append(direct)
+        matches.extend(sorted(LOCAL_IMAGE_DIR.glob(f"{viewpoint_id}_*{ext}")))
+        matches.extend(sorted(LOCAL_IMAGE_DIR.glob(f"{viewpoint_id}-*{ext}")))
+
+    seen = set()
+    unique_matches = []
+    for path in matches:
+        if path.name not in seen:
+            seen.add(path.name)
+            unique_matches.append(path)
+    return unique_matches
+
 
 @app.get("/")
 async def root():
@@ -176,7 +201,14 @@ async def query_viewpoints(
                 tag_schema_version = result.get('tag_schema_version', 'v1.0.0')
         
         # Collect SQL queries and candidates from SQL search tools
-        sql_tools = ['search_by_name', 'search_by_category', 'search_by_tags', 'search_popular', 'search_with_llm_sql']
+        sql_tools = [
+            'search_by_name',
+            'search_by_category',
+            'search_by_tags',
+            'search_by_history_terms',
+            'search_popular',
+            'search_with_llm_sql'
+        ]
         if tool_name in sql_tools:
             if 'sql' in result:
                 sql_queries_log.append({
@@ -251,6 +283,75 @@ async def query_viewpoints(
             "input": intent_input.model_dump(),
             "output": intent_result.model_dump()
         })
+    
+    # If still no results, run server-side fallback using query intent
+    if not final_results and query_intent:
+        from app.tools.sql_search_tool import get_sql_search_tool
+        
+        sql_tool = get_sql_search_tool()
+        fallback_candidates = []
+        fallback_sql_logs = []
+        
+        # 1) Try name search if we have a name candidate
+        if query_intent.name_candidates:
+            name_result = sql_tool.search_by_name(query_intent.name_candidates[0], top_n=50)
+            if name_result.get("sql"):
+                fallback_sql_logs.append({
+                    "sql": name_result.get("sql"),
+                    "params": name_result.get("params", [])
+                })
+            fallback_candidates.extend(name_result.get("candidates", []))
+        
+        # 2) Try tag-based search using known tag sources
+        if not fallback_candidates and query_intent.query_tags:
+            tag_sources = ["wiki_weak_supervision", "gpt_4o_mini_image_history"]
+            tags_result = sql_tool.search_by_tags(
+                query_intent.query_tags,
+                season=query_intent.season_hint,
+                tag_sources=tag_sources,
+                top_n=50
+            )
+            if tags_result.get("sql"):
+                fallback_sql_logs.append({
+                    "sql": tags_result.get("sql"),
+                    "params": tags_result.get("params", [])
+                })
+            fallback_candidates.extend(tags_result.get("candidates", []))
+        
+        # 3) Try history text search using scene hints or name candidates
+        if not fallback_candidates:
+            history_terms = query_intent.scene_hints or query_intent.name_candidates
+            if history_terms:
+                history_result = sql_tool.search_by_history_terms(history_terms, top_n=50)
+                if history_result.get("sql"):
+                    fallback_sql_logs.append({
+                        "sql": history_result.get("sql"),
+                        "params": history_result.get("params", [])
+                    })
+                fallback_candidates.extend(history_result.get("candidates", []))
+        
+        # Deduplicate by viewpoint_id
+        if fallback_candidates:
+            seen_ids = set()
+            unique_candidates = []
+            for c in fallback_candidates:
+                vid = c.get("viewpoint_id")
+                if vid in seen_ids:
+                    continue
+                seen_ids.add(vid)
+                unique_candidates.append(c)
+            
+            sql_queries_log.extend(fallback_sql_logs)
+            
+            from app.schemas.query import ViewpointCandidate
+            candidate_objects = [ViewpointCandidate(**c) for c in unique_candidates]
+            
+            llm_service = get_llm_service()
+            final_results = llm_service.rank_and_fuse(
+                candidates=candidate_objects,
+                query_intent=query_intent,
+                top_k=top_k
+            )
     
     # If no results from agent, return empty results with intent
     if not final_results:
@@ -354,6 +455,7 @@ async def get_viewpoint_detail(viewpoint_id: int):
     if not entity:
         raise HTTPException(status_code=404, detail="Viewpoint not found")
     
+    local_images = _find_local_images(viewpoint_id)
     return {
         "viewpoint_id": entity['viewpoint_id'],
         "name_primary": entity['name_primary'],
@@ -365,6 +467,13 @@ async def get_viewpoint_detail(viewpoint_id: int):
         "wikidata": wikidata_data,
         "visual_tags": visual_tags,
         "commons_assets": commons_assets,
+        "local_images": [
+            {
+                "filename": path.name,
+                "url": f"/api/v1/viewpoint/{viewpoint_id}/local-image/{path.name}"
+            }
+            for path in local_images
+        ],
         "historical_summary": historical_summary,
         "historical_evidence": [e.model_dump() for e in historical_evidence]
     }
@@ -486,6 +595,42 @@ async def get_viewpoint_images(
         "images": assets,
         "count": len(assets)
     }
+
+
+@app.get("/api/v1/viewpoint/{viewpoint_id}/local-images")
+async def get_viewpoint_local_images(viewpoint_id: int):
+    """
+    Get local image files for a viewpoint from exports/images/all_image.
+    """
+    local_images = _find_local_images(viewpoint_id)
+    return {
+        "viewpoint_id": viewpoint_id,
+        "images": [
+            {
+                "filename": path.name,
+                "url": f"/api/v1/viewpoint/{viewpoint_id}/local-image/{path.name}"
+            }
+            for path in local_images
+        ],
+        "count": len(local_images)
+    }
+
+
+@app.get("/api/v1/viewpoint/{viewpoint_id}/local-image/{filename}")
+async def get_viewpoint_local_image(viewpoint_id: int, filename: str):
+    """
+    Serve a local image file for a specific viewpoint.
+    """
+    if "/" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    local_images = _find_local_images(viewpoint_id)
+    image_map = {path.name: path for path in local_images}
+    image_path = image_map.get(filename)
+    if not image_path or not image_path.exists():
+        raise HTTPException(status_code=404, detail="Local image not found")
+
+    return FileResponse(str(image_path))
 
 
 if __name__ == "__main__":

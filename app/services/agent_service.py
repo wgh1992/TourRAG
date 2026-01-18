@@ -114,20 +114,25 @@ class AgentService:
                 "type": "function",
                 "function": {
                     "name": "search_by_tags",
-                    "description": "Search viewpoints by visual tags using SQL. Visual tags include: snow_peak, cherry_blossom, sunset, sunrise, autumn_foliage, etc. This searches the viewpoint_visual_tags table.",
+                    "description": "Search viewpoints by tags using SQL. Tags may include category tags, visual tags, and scene tags. This searches the viewpoint_visual_tags table.",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "tags": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "List of visual tags to search for (e.g., ['snow_peak', 'snowy'], ['cherry_blossom', 'blooming_flowers'])"
+                                "description": "List of tags to search for (e.g., ['snow_peak', 'snowy'], ['cityscape', 'panoramic'])"
                             },
                             "season": {
                                 "type": "string",
                                 "enum": ["spring", "summer", "autumn", "winter", "unknown"],
                                 "description": "Optional season filter to narrow down results",
                                 "default": "unknown"
+                            },
+                            "tag_sources": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Optional tag sources to filter (e.g., ['wiki_weak_supervision', 'gpt_4o_mini_image_history'])"
                             },
                             "top_n": {
                                 "type": "integer",
@@ -136,6 +141,29 @@ class AgentService:
                             }
                         },
                         "required": ["tags"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_by_history_terms",
+                    "description": "Search viewpoints by matching keywords in historical/Wikipedia text. Use this when the query asks for history, legends, heritage, or when you need related results based on narrative terms.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "terms": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "List of keywords or phrases to search in history text (free text, not restricted to tag vocabulary)"
+                            },
+                            "top_n": {
+                                "type": "integer",
+                                "description": "Maximum number of results to return",
+                                "default": 50
+                            }
+                        },
+                        "required": ["terms"]
                     }
                 }
             },
@@ -357,9 +385,10 @@ You have access to SQL-based MCP tools:
 3. search_by_name - Search by place name using SQL (e.g., "Mount Fuji", "Tokyo", "西湖")
 4. search_by_category - Search by category using SQL (mountain, lake, temple, etc.)
 5. search_by_tags - Search by visual tags using SQL (snow_peak, cherry_blossom, etc.)
-6. search_popular - Get popular viewpoints using SQL (ONLY use as fallback if user explicitly asks for popular places)
-7. get_viewpoint_details - Get detailed info about a specific viewpoint
-8. rank_and_explain_results - Rank and explain search results
+6. search_by_history_terms - Search by historical/Wikipedia text using keywords
+7. search_popular - Get popular viewpoints using SQL (ONLY use as fallback if user explicitly asks for popular places)
+8. get_viewpoint_details - Get detailed info about a specific viewpoint
+9. rank_and_explain_results - Rank and explain search results
 
 Use these SQL-based tools strategically:
 1. First, extract query intent to understand what the user wants
@@ -371,9 +400,10 @@ Use these SQL-based tools strategically:
    - If only visual tags → use search_by_tags
 4. IMPORTANT: If search_by_name returns 0 results (check the "count" field), DO NOT fall back to search_popular. Instead, inform the user that the location was not found in the database.
 5. IMPORTANT: When user query mentions a country (e.g., "纪念中国" means "commemorating China"), you MUST use the country parameter in search_by_category to filter results by that country.
-6. Get details for promising candidates (use get_viewpoint_details)
-7. Rank and explain results (use rank_and_explain_results)
-8. Synthesize a helpful answer
+6. If the user asks about history/legends/heritage or you need related results, use search_by_history_terms with keyword terms
+7. Get details for promising candidates (use get_viewpoint_details)
+8. Rank and explain results (use rank_and_explain_results)
+9. Synthesize a helpful answer
 
 CRITICAL RULES:
 - Never use search_popular as a fallback when a specific location search returns no results
@@ -475,8 +505,15 @@ CRITICAL RULES:
         elif function_name == "search_by_tags":
             tags = arguments.get("tags", [])
             season = arguments.get("season", "unknown")
+            tag_sources = arguments.get("tag_sources")
             top_n = arguments.get("top_n", 50)
-            result = self.sql_search.search_by_tags(tags, season, top_n)
+            result = self.sql_search.search_by_tags(tags, season, tag_sources, top_n)
+            return result
+        
+        elif function_name == "search_by_history_terms":
+            terms = arguments.get("terms", [])
+            top_n = arguments.get("top_n", 50)
+            result = self.sql_search.search_by_history_terms(terms, top_n)
             return result
         
         elif function_name == "search_with_llm_sql":
