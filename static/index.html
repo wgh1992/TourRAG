@@ -994,7 +994,6 @@
                             <div class="candidate-name">${candidate.name_primary}</div>
                             ${candidate.category_norm ? `<div class="candidate-category">${candidate.category_norm}</div>` : ''}
                         </div>
-                        <div class="confidence-badge">${(candidate.match_confidence * 100).toFixed(0)}%</div>
                     </div>
                     ${tagsHTML ? `<div class="candidate-tags">${tagsHTML}</div>` : ''}
                     ${candidate.match_explanation ? `<div class="candidate-explanation">${candidate.match_explanation}</div>` : ''}
@@ -1061,22 +1060,6 @@
                     `;
                 }
 
-                if (data.historical_evidence && data.historical_evidence.length > 0) {
-                    html += `
-                        <div class="detail-section">
-                            <h3>History Details</h3>
-                            <div style="display: grid; gap: 10px;">
-                                ${data.historical_evidence.map(e => `
-                                    <div style="padding: 10px; background: #f8f9fa; border-radius: 8px;">
-                                        <div style="font-weight: 600; color: #555;">${e.source || 'source'}</div>
-                                        ${e.reference ? `<div style="font-size: 0.85rem; color: #888;">${e.reference}</div>` : ''}
-                                        ${e.text ? `<div style="margin-top: 6px; color: #666;">${e.text}</div>` : ''}
-                                    </div>
-                                `).join('')}
-                            </div>
-                        </div>
-                    `;
-                }
 
                 const satelliteImages = data.satellite_images || [];
                 if (satelliteImages.length > 0) {

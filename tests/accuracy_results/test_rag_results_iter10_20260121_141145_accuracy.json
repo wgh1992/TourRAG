@@ -1,0 +1,71 @@
+{
+  "iou_threshold": 0.5,
+  "total_with_bbox": 8,
+  "bbox_accuracy": 0.0,
+  "avg_iou": 0.05687992364859799,
+  "name_top_k": 5,
+  "total_with_name": 10,
+  "name_accuracy": 0.9,
+  "total_with_iou_and_name": 8,
+  "combined_accuracy": 0.0,
+  "iteration_accuracies": {
+    "1": {
+      "total": 10,
+      "passed": 0,
+      "accuracy": 0.0
+    },
+    "2": {
+      "total": 10,
+      "passed": 9,
+      "accuracy": 0.9
+    },
+    "3": {
+      "total": 10,
+      "passed": 10,
+      "accuracy": 1.0
+    },
+    "4": {
+      "total": 10,
+      "passed": 10,
+      "accuracy": 1.0
+    },
+    "5": {
+      "total": 10,
+      "passed": 10,
+      "accuracy": 1.0
+    },
+    "6": {
+      "total": 10,
+      "passed": 10,
+      "accuracy": 1.0
+    },
+    "7": {
+      "total": 10,
+      "passed": 10,
+      "accuracy": 1.0
+    },
+    "8": {
+      "total": 10,
+      "passed": 10,
+      "accuracy": 1.0
+    },
+    "9": {
+      "total": 10,
+      "passed": 10,
+      "accuracy": 1.0
+    },
+    "10": {
+      "total": 10,
+      "passed": 10,
+      "accuracy": 1.0
+    }
+  },
+  "found_at_iteration_distribution": {
+    "2": 9,
+    "3": 1
+  },
+  "avg_found_iteration": 2.1,
+  "max_iterations": 10,
+  "timestamp": "2026-01-21T14:16:00.247514",
+  "output_file": "/Users/z3548881/Desktop/TourRAG/TourRAG_code/tests/test_rag_results_iter10_20260121_141145.jsonl"
+}

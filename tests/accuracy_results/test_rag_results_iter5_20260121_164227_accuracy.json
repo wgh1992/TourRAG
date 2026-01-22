@@ -1,0 +1,117 @@
+{
+  "iou_threshold": 0.5,
+  "total_with_bbox": 8,
+  "bbox_accuracy": 0.0,
+  "avg_iou": 0.05386418395139326,
+  "name_top_k": 5,
+  "total_with_name": 10,
+  "name_accuracy": 0.9,
+  "total_with_iou_and_name": 8,
+  "combined_accuracy": 0.0,
+  "iteration_accuracies": {
+    "1": {
+      "total": 10,
+      "passed": 0,
+      "accuracy": 0.0
+    },
+    "2": {
+      "total": 10,
+      "passed": 8,
+      "accuracy": 0.8
+    },
+    "3": {
+      "total": 10,
+      "passed": 9,
+      "accuracy": 0.9
+    },
+    "4": {
+      "total": 10,
+      "passed": 9,
+      "accuracy": 0.9
+    },
+    "5": {
+      "total": 10,
+      "passed": 9,
+      "accuracy": 0.9
+    }
+  },
+  "iteration_accuracies_top3": {
+    "1": {
+      "total": 10,
+      "passed": 0,
+      "accuracy": 0.0
+    },
+    "2": {
+      "total": 10,
+      "passed": 6,
+      "accuracy": 0.6
+    },
+    "3": {
+      "total": 10,
+      "passed": 8,
+      "accuracy": 0.8
+    },
+    "4": {
+      "total": 10,
+      "passed": 8,
+      "accuracy": 0.8
+    },
+    "5": {
+      "total": 10,
+      "passed": 8,
+      "accuracy": 0.8
+    }
+  },
+  "iteration_accuracies_top5": {
+    "1": {
+      "total": 10,
+      "passed": 0,
+      "accuracy": 0.0
+    },
+    "2": {
+      "total": 10,
+      "passed": 8,
+      "accuracy": 0.8
+    },
+    "3": {
+      "total": 10,
+      "passed": 9,
+      "accuracy": 0.9
+    },
+    "4": {
+      "total": 10,
+      "passed": 9,
+      "accuracy": 0.9
+    },
+    "5": {
+      "total": 10,
+      "passed": 9,
+      "accuracy": 0.9
+    }
+  },
+  "found_at_iteration_distribution": {
+    "2": 8,
+    "3": 1
+  },
+  "avg_found_iteration": 2.111111111111111,
+  "found_at_top3_iteration_distribution": {
+    "2": 6,
+    "3": 2
+  },
+  "avg_found_top3_iteration": 2.25,
+  "found_at_top5_iteration_distribution": {
+    "2": 8,
+    "3": 1
+  },
+  "avg_found_top5_iteration": 2.111111111111111,
+  "stopped_at_iteration_distribution": {
+    "5": 10
+  },
+  "avg_stopped_iteration": 5.0,
+  "final_top3_accuracy": 0.0,
+  "final_top5_accuracy": 0.0,
+  "final_accuracy": 0.0,
+  "max_iterations": 5,
+  "timestamp": "2026-01-21T16:48:50.029414",
+  "output_file": "/Users/z3548881/Desktop/TourRAG/TourRAG_code/tests/test_rag_results_iter5_20260121_164227.jsonl"
+}

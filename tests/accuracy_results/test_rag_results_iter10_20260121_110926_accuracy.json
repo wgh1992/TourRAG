@@ -1,0 +1,66 @@
+{
+  "iou_threshold": 0.5,
+  "total_with_bbox": 2,
+  "bbox_accuracy": 0.0,
+  "avg_iou": 0.049135220125786166,
+  "name_top_k": 5,
+  "total_with_name": 3,
+  "name_accuracy": 1.0,
+  "total_with_iou_and_name": 2,
+  "combined_accuracy": 0.0,
+  "iteration_accuracies": {
+    "1": {
+      "total": 3,
+      "passed": 0,
+      "accuracy": 0.0
+    },
+    "2": {
+      "total": 3,
+      "passed": 3,
+      "accuracy": 1.0
+    },
+    "3": {
+      "total": 3,
+      "passed": 3,
+      "accuracy": 1.0
+    },
+    "4": {
+      "total": 3,
+      "passed": 3,
+      "accuracy": 1.0
+    },
+    "5": {
+      "total": 3,
+      "passed": 3,
+      "accuracy": 1.0
+    },
+    "6": {
+      "total": 3,
+      "passed": 3,
+      "accuracy": 1.0
+    },
+    "7": {
+      "total": 3,
+      "passed": 3,
+      "accuracy": 1.0
+    },
+    "8": {
+      "total": 3,
+      "passed": 3,
+      "accuracy": 1.0
+    },
+    "9": {
+      "total": 3,
+      "passed": 3,
+      "accuracy": 1.0
+    },
+    "10": {
+      "total": 3,
+      "passed": 3,
+      "accuracy": 1.0
+    }
+  },
+  "max_iterations": 10,
+  "timestamp": "2026-01-21T11:10:41.507135",
+  "output_file": "/Users/z3548881/Desktop/TourRAG/TourRAG_code/tests/test_rag_results_iter10_20260121_110926.jsonl"
+}

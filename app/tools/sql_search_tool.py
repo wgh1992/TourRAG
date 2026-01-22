@@ -12,6 +12,9 @@ from app.services.database import db
 from app.schemas.query import ViewpointCandidate, QueryIntent
 from app.config import settings
 
+# Disable name-based fallback searches (testing mode)
+DISABLE_NAME_FALLBACK = False
+
 
 # Country name mapping (Chinese to English and common variants)
 COUNTRY_NAME_MAPPING = {
@@ -149,7 +152,10 @@ class SQLSearchTool:
     - viewpoint_entity 1:N viewpoint_visual_tags
     
     Search Capabilities:
-    - Name search: Use ILIKE on name_primary or name_variants
+    - Name search: 
+      * For name_primary: Use ILIKE directly (e.g., name_primary ILIKE %s)
+      * For name_variants (JSONB): MUST convert to text first (e.g., name_variants::text ILIKE %s)
+      * NEVER use name_variants ILIKE directly - it will cause "operator does not exist: jsonb ~~* unknown" error
     - Category search: Filter by category_norm
     - Historical information search: Join viewpoint_wiki and search extract_text using ILIKE
     - Visual tags search: Join viewpoint_visual_tags and use JSONB @> operator to check if tags array contains specific tags
@@ -160,14 +166,16 @@ class SQLSearchTool:
     - Use ST_X(geom) and ST_Y(geom) to get longitude and latitude
     - Use ST_Within(geom, ST_MakeEnvelope(...)) for bounding box queries
     - Use ILIKE for case-insensitive text matching (for names, Wikipedia text)
+    - For name_variants (JSONB field): ALWAYS use name_variants::text ILIKE %s (convert to text first)
     - Use JSONB operators for tags:
-      * @> operator: tags @> '["snow_peak"]'::jsonb (check if array contains value)
+      * @> operator: tags @> %s::jsonb (check if array contains value, parameter must be JSON string like '["tag"]')
       * -> operator: sections->'history' (access JSONB object field)
       * ->> operator: sections->>'history' (get JSONB field as text)
     - For historical text search: JOIN viewpoint_wiki and use extract_text ILIKE %s
-    - For visual tags search: JOIN viewpoint_visual_tags and use tags @> %s::jsonb
+    - For visual tags search: JOIN viewpoint_visual_tags and use tags @> %s::jsonb (parameter is JSON string)
     - For season filter: WHERE vt.season = %s in viewpoint_visual_tags join
     - Always use parameterized queries with %s placeholders
+    - NEVER hardcode values in SQL - always use %s placeholders
     """
     
     def __init__(self, openai_client: Optional[OpenAI] = None):
@@ -213,12 +221,17 @@ CRITICAL RULES:
    - name_score (calculated, 0.0-1.0)
    - geo_score (calculated, 0.0-1.0)
    - category_score (calculated, 0.0-1.0)
-5. Use ILIKE for case-insensitive text matching (for names, Wikipedia text)
+5. For name search:
+   - name_primary: Use ILIKE directly (e.g., name_primary ILIKE %s)
+   - name_variants (JSONB): MUST convert to text first (e.g., name_variants::text ILIKE %s)
+   - NEVER use name_variants ILIKE %s directly - it will cause "operator does not exist: jsonb ~~* unknown" error
+   - Example: (name_primary ILIKE %s OR name_variants::text ILIKE %s)
 6. For country filtering, join with viewpoint_commons_assets table
 7. For visual tags search:
    - JOIN viewpoint_visual_tags table
    - Use tags @> %s::jsonb to check if tags array contains specific tags
-   - Example: tags @> '["snow_peak"]'::jsonb
+   - Parameter must be a JSON string like '["snow_peak"]' (passed as parameter, not hardcoded)
+   - Example: tags @> %s::jsonb (where parameter is '["snow_peak"]')
 8. For season filtering:
    - JOIN viewpoint_visual_tags table
    - Use WHERE vt.season = %s
@@ -226,9 +239,10 @@ CRITICAL RULES:
    - JOIN viewpoint_wiki table
    - Use extract_text ILIKE %s to search in Wikipedia text
    - Example: w.extract_text ILIKE %s
-10. Always include LIMIT clause
+10. Always include LIMIT clause with %s placeholder (never hardcode the limit value)
 11. Order by relevance scores and popularity
 12. Use DISTINCT if joining multiple tables to avoid duplicate rows
+13. NEVER hardcode any values - always use %s placeholders for ALL dynamic values
 
 Query Intent:
 - Name candidates: {query_intent.name_candidates}
@@ -243,23 +257,75 @@ Top N: {top_n}
 Generate a PostgreSQL query that searches for viewpoints matching this intent.
 Return ONLY the SQL query with %s placeholders for parameters."""
 
-        # Build parameter list for LLM to understand what to use
-        param_info = []
+        # Build parameter list FIRST (before calling LLM)
+        params = []
+        param_descriptions = []
+        
+        # Add name patterns (for ILIKE queries) - typically appear first in WHERE clauses
+        # For each name candidate, provide 2 parameters: one for name_primary, one for name_variants
+        # This allows LLM to generate: (name_primary ILIKE %s OR name_variants::text ILIKE %s)
         if query_intent.name_candidates:
-            param_info.append(f"Name patterns: {len(query_intent.name_candidates)} patterns (use %s for each)")
+            for name in query_intent.name_candidates:
+                param_value = f"%{name}%"
+                # First parameter for name_primary
+                params.append(param_value)
+                param_descriptions.append(f"Param {len(params)}: Name pattern '{name}' for name_primary (ILIKE: {param_value})")
+                # Second parameter for name_variants (same pattern, but for JSONB field)
+                params.append(param_value)
+                param_descriptions.append(f"Param {len(params)}: Name pattern '{name}' for name_variants (name_variants::text ILIKE: {param_value})")
+        
+        # Add category filters - typically in WHERE or IN clauses
         if query_intent.query_tags:
             valid_categories = ['mountain', 'lake', 'temple', 'museum', 'park', 
                                'coast', 'cityscape', 'monument', 'bridge', 
                                'palace', 'tower', 'cave', 'waterfall', 'valley', 'island']
             categories = [tag for tag in query_intent.query_tags if tag in valid_categories]
-            if categories:
-                param_info.append(f"Categories: {len(categories)} values (use %s for each)")
+            for cat in categories:
+                params.append(cat)
+                param_descriptions.append(f"Param {len(params)}: Category '{cat}' (exact match)")
+        
+        # Add visual tags (for JSONB @> operator) - need to be JSONB arrays
+        if query_intent.query_tags:
+            visual_tags = [tag for tag in query_intent.query_tags 
+                          if tag not in ['mountain', 'lake', 'temple', 'museum', 'park', 
+                                        'coast', 'cityscape', 'monument', 'bridge', 
+                                        'palace', 'tower', 'cave', 'waterfall', 'valley', 'island']]
+            for tag in visual_tags:
+                param_value = json.dumps([tag])
+                params.append(param_value)
+                param_descriptions.append(f"Param {len(params)}: Visual tag '{tag}' (JSONB array: {param_value})")
+        
+        # Add scene hints (for Wikipedia text search) - search in extract_text
+        if query_intent.scene_hints:
+            for scene in query_intent.scene_hints:
+                param_value = f"%{scene}%"
+                params.append(param_value)
+                param_descriptions.append(f"Param {len(params)}: Scene hint '{scene}' (for ILIKE in extract_text: {param_value})")
+        
+        # Add country variants - typically in JOIN conditions
+        # Use only the first variant to reduce parameter count and complexity
+        # LLM can use OR conditions if multiple variants are needed
         if query_intent.geo_hints and query_intent.geo_hints.country:
             country_variants = normalize_country_name(query_intent.geo_hints.country)
-            param_info.append(f"Country patterns: {len(country_variants)} patterns (use %s for each)")
+            if country_variants:
+                # Use only the primary country name (first variant) to simplify
+                # LLM can add OR conditions for other variants if needed
+                primary_country = country_variants[0]
+                param_value = f"%{primary_country}%"
+                params.append(param_value)
+                param_descriptions.append(
+                    f"Param {len(params)}: Country '{primary_country}' (for ILIKE: {param_value}). "
+                    f"Note: Other variants {country_variants[1:] if len(country_variants) > 1 else []} can be handled with OR conditions if needed."
+                )
+        
+        # Add season - typically in WHERE clauses for visual_tags
         if query_intent.season_hint and query_intent.season_hint != 'unknown':
-            param_info.append(f"Season: 1 value (use %s)")
-        param_info.append(f"LIMIT: 1 value (use %s for {top_n})")
+            params.append(query_intent.season_hint)
+            param_descriptions.append(f"Param {len(params)}: Season '{query_intent.season_hint}' (exact match)")
+        
+        # Add top_n (should be last, in LIMIT clause)
+        params.append(top_n)
+        param_descriptions.append(f"Param {len(params)}: LIMIT value {top_n}")
         
         # Build detailed search requirements
         search_requirements = []
@@ -282,19 +348,45 @@ Return ONLY the SQL query with %s placeholders for parameters."""
         if query_intent.scene_hints:
             search_requirements.append(f"- Scene hints: {query_intent.scene_hints} (may need to search in Wikipedia text or tags)")
         
+        # Build user prompt with exact parameter information
+        param_list_text = "\n".join(param_descriptions) if param_descriptions else "No parameters needed"
+        
         user_prompt = f"""Generate a SQL query for {search_type} search with the following requirements:
 
 {chr(10).join(search_requirements) if search_requirements else '- General search (no specific filters)'}
 
-- Limit: {top_n}
+- Limit: {top_n} (MUST use %s placeholder, NOT hardcoded value!)
 
-IMPORTANT INSTRUCTIONS:
-1. If visual tags are specified, JOIN viewpoint_visual_tags and use tags @> %s::jsonb to search
-2. If season is specified, JOIN viewpoint_visual_tags and filter by season = %s
-3. If searching for historical information or scene descriptions, JOIN viewpoint_wiki and search extract_text ILIKE %s
-4. Use DISTINCT to avoid duplicate rows when joining multiple tables
-5. The number of %s placeholders must match the total number of parameters
-6. Return ONLY the SQL query with the correct number of %s placeholders."""
+EXACT PARAMETER LIST (you MUST use exactly these {len(params)} parameters in order):
+{param_list_text}
+
+CRITICAL INSTRUCTIONS:
+1. You MUST use exactly {len(params)} %s placeholders in your SQL query - no more, no less!
+2. Use the parameters in the exact order listed above
+3. NEVER hardcode values - always use %s placeholders for ALL dynamic values including:
+   - Name patterns (use %s, not hardcoded strings like '%Name%')
+   - Country filters (use %s, not hardcoded country names like '%Country%')
+   - LIMIT clause (use LIMIT %s, not LIMIT {top_n})
+4. For name search, each name candidate has 2 parameters (one for name_primary, one for name_variants):
+   - Use BOTH parameters: (name_primary ILIKE %s OR name_variants::text ILIKE %s)
+   - For name_variants: ALWAYS use name_variants::text ILIKE %s (convert to text first)
+   - WRONG: name_variants ILIKE %s (without ::text) - this will cause "operator does not exist: jsonb ~~* unknown" error!
+   - If you have multiple name candidates, use OR to combine them:
+     Example: ((name_primary ILIKE %s OR name_variants::text ILIKE %s) OR (name_primary ILIKE %s OR name_variants::text ILIKE %s))
+5. If visual tags are specified, JOIN viewpoint_visual_tags and use tags @> %s::jsonb to search
+   - Parameter will be a JSON string like '["tag"]' - use it as-is with ::jsonb cast
+6. If season is specified, JOIN viewpoint_visual_tags and filter by season = %s
+7. If searching for historical information or scene descriptions, JOIN viewpoint_wiki and search extract_text ILIKE %s
+   - Use ONLY extract_text ILIKE %s - DO NOT add extra OR conditions (like category_osm->>'festival' or category_norm)
+   - Each scene hint has exactly ONE parameter - use it only once!
+8. For country filters, use ONLY the provided parameter:
+   - Use: vca.viewpoint_country ILIKE %s
+   - DO NOT add multiple OR conditions like: (vca.viewpoint_country ILIKE %s OR vca.viewpoint_country ILIKE %s OR ...)
+   - You only have ONE country parameter - use it exactly ONCE!
+9. Use DISTINCT to avoid duplicate rows when joining multiple tables
+10. Count the %s placeholders carefully - there must be exactly {len(params)} of them!
+11. Before returning, verify: count all %s in your SQL - it must equal {len(params)}!
+12. Return ONLY the SQL query with the correct number of %s placeholders."""
 
         try:
             response = self.client.chat.completions.create(
@@ -325,60 +417,165 @@ IMPORTANT INSTRUCTIONS:
                 if keyword in sql_upper:
                     raise ValueError(f"Forbidden SQL keyword: {keyword}")
             
-            # Extract parameters from query intent (in the order they should appear in SQL)
-            params = []
+            # Fix common SQL issues before validation
+            # 1. Fix name_variants ILIKE errors (must convert to text first)
+            # Pattern: name_variants ILIKE (without ::text)
+            sql = re.sub(
+                r'\bname_variants\s+ILIKE\s+%s',
+                'name_variants::text ILIKE %s',
+                sql,
+                flags=re.IGNORECASE
+            )
+            # Also fix if there's a pattern like name_variants ILIKE '%...%'
+            sql = re.sub(
+                r'\bname_variants\s+ILIKE\s+[\'"]%[^\'"]+%[\'"]',
+                lambda m: m.group(0).replace('name_variants ILIKE', 'name_variants::text ILIKE', 1),
+                sql,
+                flags=re.IGNORECASE
+            )
             
-            # Add name patterns (for ILIKE queries) - typically appear first in WHERE clauses
-            if query_intent.name_candidates:
-                for name in query_intent.name_candidates:
-                    params.append(f"%{name}%")
-            
-            # Add category filters - typically in WHERE or IN clauses
-            if query_intent.query_tags:
-                valid_categories = ['mountain', 'lake', 'temple', 'museum', 'park', 
-                                   'coast', 'cityscape', 'monument', 'bridge', 
-                                   'palace', 'tower', 'cave', 'waterfall', 'valley', 'island']
-                categories = [tag for tag in query_intent.query_tags if tag in valid_categories]
-                params.extend(categories)
-            
-            # Add visual tags (for JSONB @> operator) - need to be JSONB arrays
-            if query_intent.query_tags:
-                visual_tags = [tag for tag in query_intent.query_tags 
-                              if tag not in ['mountain', 'lake', 'temple', 'museum', 'park', 
-                                            'coast', 'cityscape', 'monument', 'bridge', 
-                                            'palace', 'tower', 'cave', 'waterfall', 'valley', 'island']]
-                # Visual tags will be converted to JSONB format in SQL, but we pass them as strings
-                # The LLM should generate: tags @> %s::jsonb where %s is a JSON array string
-                for tag in visual_tags:
-                    # Pass as JSON array string for @> operator
-                    params.append(json.dumps([tag]))
-            
-            # Add scene hints (for Wikipedia text search) - search in extract_text
-            if query_intent.scene_hints:
-                for scene in query_intent.scene_hints:
-                    params.append(f"%{scene}%")
-            
-            # Add country variants - typically in JOIN conditions
-            if query_intent.geo_hints and query_intent.geo_hints.country:
-                country_variants = normalize_country_name(query_intent.geo_hints.country)
-                params.extend([f"%{v}%" for v in country_variants])
-            
-            # Add season - typically in WHERE clauses for visual_tags
-            if query_intent.season_hint and query_intent.season_hint != 'unknown':
-                params.append(query_intent.season_hint)
-            
-            # Add top_n (should be last, in LIMIT clause)
-            params.append(top_n)
+            # 2. Fix JSONB @> operator with incorrect parameter format
+            # If we see name_variants @> '%...%', it's wrong - should be @> '["..."]'::jsonb
+            # But we'll handle this in parameter validation
             
             # Count parameter placeholders in SQL
             param_count = sql.count('%s')
             
-            # If parameter count doesn't match, fail fast and let fallback handle it
-            if len(params) != param_count:
-                print(f"[SQLSearchTool] Warning: Parameter count mismatch. SQL has {param_count} placeholders, but we have {len(params)} parameters.")
-                print(f"[SQLSearchTool] SQL preview: {sql[:300]}...")
-                print(f"[SQLSearchTool] Expected params: {params}")
-                raise ValueError("LLM SQL parameter count mismatch")
+            # If parameter count doesn't match, try to fix it or fail gracefully
+            # Use a loop to apply multiple fixes until count matches or no more fixes can be applied
+            max_fix_attempts = 5
+            fix_attempt = 0
+            while len(params) != param_count and fix_attempt < max_fix_attempts:
+                fix_attempt += 1
+                if fix_attempt == 1:
+                    print(f"[SQLSearchTool] Warning: Parameter count mismatch. SQL has {param_count} placeholders, but we have {len(params)} parameters.")
+                    print(f"[SQLSearchTool] SQL preview: {sql[:500]}...")
+                    print(f"[SQLSearchTool] Expected params ({len(params)}): {params}")
+                
+                fixed_this_iteration = False
+                
+                # Try to fix: if SQL has MORE placeholders, LLM might have added extra OR conditions
+                # Common issue: LLM adds multiple OR conditions for country variants or scene hints
+                if param_count > len(params):
+                    # Fix 1: Remove extra country OR conditions
+                    # Pattern: (country ILIKE %s OR country ILIKE %s OR country ILIKE %s) when we only have 1 param
+                    if query_intent.geo_hints and query_intent.geo_hints.country:
+                        # Find country filter patterns with multiple OR conditions
+                        country_pattern = r'\(vca\.viewpoint_country\s+ILIKE\s+%s(?:\s+OR\s+vca\.viewpoint_country\s+ILIKE\s+%s)+\)'
+                        matches = list(re.finditer(country_pattern, sql, re.IGNORECASE))
+                        if matches:
+                            # Process from end to start to avoid index shifting issues
+                            for match in reversed(matches):
+                                # Count how many OR conditions are in this match
+                                or_count = match.group(0).count('ILIKE %s')
+                                if or_count > 1:
+                                    # Replace with single condition
+                                    sql = sql[:match.start()] + '(vca.viewpoint_country ILIKE %s)' + sql[match.end():]
+                                    param_count = sql.count('%s')
+                                    print(f"[SQLSearchTool] Fixed (attempt {fix_attempt}): Removed {or_count - 1} extra country OR conditions. New param count: {param_count}")
+                                    fixed_this_iteration = True
+                                    break
+                    
+                    # Fix 2: Remove extra scene hint OR conditions
+                    # Pattern: (extract_text ILIKE %s OR category_osm->>'festival' ILIKE %s) when we only have 1 scene hint param
+                    if not fixed_this_iteration and query_intent.scene_hints and len(query_intent.scene_hints) == 1:
+                        # Find patterns like: (vw.extract_text ILIKE %s OR ve.category_osm->>'festival' ILIKE %s)
+                        scene_pattern = r'\(vw\.extract_text\s+ILIKE\s+%s\s+OR\s+[^)]+ILIKE\s+%s\)'
+                        matches = list(re.finditer(scene_pattern, sql, re.IGNORECASE))
+                        if matches:
+                            # Process from end to start
+                            for match in reversed(matches):
+                                # Replace with single condition (keep only extract_text)
+                                sql = sql[:match.start()] + '(vw.extract_text ILIKE %s)' + sql[match.end():]
+                                param_count = sql.count('%s')
+                                print(f"[SQLSearchTool] Fixed (attempt {fix_attempt}): Removed extra scene hint OR condition. New param count: {param_count}")
+                                fixed_this_iteration = True
+                                break
+                        
+                        # Also check for: (vw.extract_text ILIKE %s OR ve.category_norm ILIKE %s)
+                        if not fixed_this_iteration:
+                            scene_pattern2 = r'\(vw\.extract_text\s+ILIKE\s+%s\s+OR\s+ve\.category_norm\s+ILIKE\s+%s\)'
+                            matches = list(re.finditer(scene_pattern2, sql, re.IGNORECASE))
+                            if matches:
+                                # Process from end to start
+                                for match in reversed(matches):
+                                    # Replace with single condition (keep only extract_text)
+                                    sql = sql[:match.start()] + '(vw.extract_text ILIKE %s)' + sql[match.end():]
+                                    param_count = sql.count('%s')
+                                    print(f"[SQLSearchTool] Fixed (attempt {fix_attempt}): Removed extra scene hint OR condition (category_norm). New param count: {param_count}")
+                                    fixed_this_iteration = True
+                                    break
+                
+                # Try to fix: if SQL has fewer placeholders, it might be using hardcoded values
+                # Common issue: LLM uses hardcoded country names or LIMIT values instead of placeholders
+                if not fixed_this_iteration and param_count < len(params):
+                    # Check if LIMIT is hardcoded (common issue)
+                    if 'LIMIT' in sql.upper():
+                        # Try to find hardcoded LIMIT values
+                        limit_pattern = r'LIMIT\s+(\d+)'
+                        matches = re.findall(limit_pattern, sql, flags=re.IGNORECASE)
+                        for match in matches:
+                            limit_val = int(match)
+                            if limit_val == top_n:
+                                # Replace hardcoded LIMIT with placeholder
+                                sql = re.sub(rf'LIMIT\s+{limit_val}\b', 'LIMIT %s', sql, flags=re.IGNORECASE)
+                                param_count = sql.count('%s')
+                                print(f"[SQLSearchTool] Fixed (attempt {fix_attempt}): Replaced hardcoded LIMIT {limit_val} with placeholder. New param count: {param_count}")
+                                fixed_this_iteration = True
+                                break
+                    
+                    # Check if country filters are hardcoded (common issue with country variants)
+                    if not fixed_this_iteration and query_intent.geo_hints and query_intent.geo_hints.country:
+                        country_variants = normalize_country_name(query_intent.geo_hints.country)
+                        # Try to find and replace hardcoded country names
+                        for variant in country_variants:
+                            # Look for ILIKE patterns with hardcoded country
+                            patterns = [
+                                rf"ILIKE\s+['\"]%{re.escape(variant)}%['\"]",
+                                rf"ILIKE\s+['\"]{re.escape(variant)}['\"]",
+                            ]
+                            for pattern in patterns:
+                                if re.search(pattern, sql, re.IGNORECASE):
+                                    sql = re.sub(pattern, "ILIKE %s", sql, flags=re.IGNORECASE)
+                                    param_count = sql.count('%s')
+                                    print(f"[SQLSearchTool] Fixed (attempt {fix_attempt}): Replaced hardcoded country filter '{variant}'. New param count: {param_count}")
+                                    fixed_this_iteration = True
+                                    break
+                            if fixed_this_iteration:
+                                break
+                    
+                    # Check if name patterns are hardcoded
+                    if not fixed_this_iteration and query_intent.name_candidates:
+                        for name in query_intent.name_candidates:
+                            # Look for hardcoded name patterns
+                            patterns = [
+                                rf"ILIKE\s+['\"]%{re.escape(name)}%['\"]",
+                                rf"ILIKE\s+['\"]{re.escape(name)}['\"]",
+                            ]
+                            for pattern in patterns:
+                                if re.search(pattern, sql, re.IGNORECASE):
+                                    sql = re.sub(pattern, "ILIKE %s", sql, flags=re.IGNORECASE)
+                                    param_count = sql.count('%s')
+                                    print(f"[SQLSearchTool] Fixed (attempt {fix_attempt}): Replaced hardcoded name pattern '{name}'. New param count: {param_count}")
+                                    fixed_this_iteration = True
+                                    break
+                            if fixed_this_iteration:
+                                break
+                
+                # Update param_count after all fixes
+                param_count = sql.count('%s')
+                
+                # If no fix was applied this iteration, break to avoid infinite loop
+                if not fixed_this_iteration:
+                    break
+                
+                # Final check: if still doesn't match after all fixes
+                param_count = sql.count('%s')
+                if len(params) != param_count:
+                    print(f"[SQLSearchTool] Could not auto-fix parameter mismatch. SQL has {param_count} placeholders, need {len(params)}.")
+                    print(f"[SQLSearchTool] Parameter descriptions: {param_descriptions}")
+                    print(f"[SQLSearchTool] Full SQL: {sql}")
+                    raise ValueError("LLM SQL parameter count mismatch")
             
             return sql, params
             
@@ -402,10 +599,50 @@ IMPORTANT INSTRUCTIONS:
         if not sql_upper.startswith('SELECT'):
             raise ValueError("Only SELECT queries are allowed")
         
+        # Validate JSONB field usage
+        # Check for common errors with name_variants (JSONB field)
+        # Pattern: name_variants ILIKE (without ::text conversion)
+        if re.search(r'\bname_variants\s+ILIKE\s+(?!.*::text)', sql, re.IGNORECASE):
+            # Try to auto-fix by adding ::text conversion
+            sql = re.sub(
+                r'\b(name_variants)\s+ILIKE\s+(%s|[\'"]%[^\'"]+%[\'"])',
+                r'\1::text ILIKE \2',
+                sql,
+                flags=re.IGNORECASE
+            )
+            print(f"[SQLSearchTool] Auto-fixed: Added ::text conversion for name_variants ILIKE")
+        
+        # Check for incorrect JSONB @> usage with ILIKE patterns
+        # Pattern: name_variants @> '%...%' (should be @> '["..."]'::jsonb)
+        if re.search(r'\bname_variants\s+@>\s+[\'"]%', sql, re.IGNORECASE):
+            raise ValueError(
+                "Invalid JSONB operator usage: name_variants @> cannot be used with ILIKE patterns. "
+                "For name_variants search, use name_variants::text ILIKE %s instead. "
+                "The @> operator is only for checking if JSONB array contains a value."
+            )
+        
         # Execute query
-        with db.get_cursor() as cursor:
-            cursor.execute(sql, params)
-            return cursor.fetchall()
+        try:
+            with db.get_cursor() as cursor:
+                cursor.execute(sql, params)
+                return cursor.fetchall()
+        except Exception as e:
+            error_msg = str(e)
+            # Provide helpful error messages for common issues
+            if "operator does not exist: jsonb ~~*" in error_msg or "jsonb ~~* unknown" in error_msg:
+                raise ValueError(
+                    f"JSONB type error: Cannot use ILIKE directly on JSONB fields. "
+                    f"Use name_variants::text ILIKE %s instead. Original error: {error_msg}"
+                )
+            elif "invalid input syntax for type json" in error_msg:
+                raise ValueError(
+                    f"JSON syntax error: Cannot use ILIKE patterns (with %) in JSONB @> operator. "
+                    f"For name search, use name_variants::text ILIKE %s. "
+                    f"For tag search, use tags @> %s::jsonb where parameter is a JSON string like '[\"tag\"]'. "
+                    f"Original error: {error_msg}"
+                )
+            else:
+                raise
     
     def search_with_llm_sql(
         self,
@@ -531,7 +768,7 @@ IMPORTANT INSTRUCTIONS:
         Uses more relaxed criteria to find results.
         """
         # Priority 1: Try name search first (most likely to find results)
-        if query_intent.name_candidates:
+        if not DISABLE_NAME_FALLBACK and query_intent.name_candidates:
             print(f"[SQLSearchTool] Fallback: Trying name search for '{query_intent.name_candidates[0]}'")
             name_result = self.search_by_name(query_intent.name_candidates[0], top_n=top_n)
             if name_result.get('count', 0) > 0:
@@ -572,7 +809,7 @@ IMPORTANT INSTRUCTIONS:
                     return tags_result
         
         # Priority 4: If we have name candidates but no results, try fuzzy name search
-        if query_intent.name_candidates:
+        if not DISABLE_NAME_FALLBACK and query_intent.name_candidates:
             # Try searching with partial name
             for name in query_intent.name_candidates:
                 if len(name) > 2:

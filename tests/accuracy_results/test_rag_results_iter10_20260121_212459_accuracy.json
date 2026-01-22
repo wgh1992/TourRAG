@@ -1,0 +1,261 @@
+{
+  "iou_threshold": 0.5,
+  "total_with_bbox": 77,
+  "bbox_accuracy": 0.0,
+  "avg_iou": 0.04635728437524264,
+  "name_top_k": 5,
+  "total_with_name": 100,
+  "name_accuracy": 0.69,
+  "total_with_iou_and_name": 77,
+  "combined_accuracy": 0.0,
+  "iteration_accuracies": {
+    "1": {
+      "total": 100,
+      "passed": 0,
+      "accuracy": 0.0
+    },
+    "2": {
+      "total": 100,
+      "passed": 40,
+      "accuracy": 0.4
+    },
+    "3": {
+      "total": 100,
+      "passed": 64,
+      "accuracy": 0.64
+    },
+    "4": {
+      "total": 100,
+      "passed": 71,
+      "accuracy": 0.71
+    },
+    "5": {
+      "total": 100,
+      "passed": 71,
+      "accuracy": 0.71
+    },
+    "6": {
+      "total": 100,
+      "passed": 71,
+      "accuracy": 0.71
+    },
+    "7": {
+      "total": 100,
+      "passed": 71,
+      "accuracy": 0.71
+    },
+    "8": {
+      "total": 100,
+      "passed": 71,
+      "accuracy": 0.71
+    },
+    "9": {
+      "total": 100,
+      "passed": 71,
+      "accuracy": 0.71
+    },
+    "10": {
+      "total": 100,
+      "passed": 71,
+      "accuracy": 0.71
+    }
+  },
+  "iteration_accuracies_top1": {
+    "1": {
+      "total": 100,
+      "passed": 0,
+      "accuracy": 0.0
+    },
+    "2": {
+      "total": 100,
+      "passed": 31,
+      "accuracy": 0.31
+    },
+    "3": {
+      "total": 100,
+      "passed": 58,
+      "accuracy": 0.58
+    },
+    "4": {
+      "total": 100,
+      "passed": 65,
+      "accuracy": 0.65
+    },
+    "5": {
+      "total": 100,
+      "passed": 65,
+      "accuracy": 0.65
+    },
+    "6": {
+      "total": 100,
+      "passed": 65,
+      "accuracy": 0.65
+    },
+    "7": {
+      "total": 100,
+      "passed": 65,
+      "accuracy": 0.65
+    },
+    "8": {
+      "total": 100,
+      "passed": 65,
+      "accuracy": 0.65
+    },
+    "9": {
+      "total": 100,
+      "passed": 65,
+      "accuracy": 0.65
+    },
+    "10": {
+      "total": 100,
+      "passed": 65,
+      "accuracy": 0.65
+    }
+  },
+  "iteration_accuracies_top3": {
+    "1": {
+      "total": 100,
+      "passed": 0,
+      "accuracy": 0.0
+    },
+    "2": {
+      "total": 100,
+      "passed": 35,
+      "accuracy": 0.35
+    },
+    "3": {
+      "total": 100,
+      "passed": 61,
+      "accuracy": 0.61
+    },
+    "4": {
+      "total": 100,
+      "passed": 68,
+      "accuracy": 0.68
+    },
+    "5": {
+      "total": 100,
+      "passed": 68,
+      "accuracy": 0.68
+    },
+    "6": {
+      "total": 100,
+      "passed": 68,
+      "accuracy": 0.68
+    },
+    "7": {
+      "total": 100,
+      "passed": 68,
+      "accuracy": 0.68
+    },
+    "8": {
+      "total": 100,
+      "passed": 68,
+      "accuracy": 0.68
+    },
+    "9": {
+      "total": 100,
+      "passed": 68,
+      "accuracy": 0.68
+    },
+    "10": {
+      "total": 100,
+      "passed": 68,
+      "accuracy": 0.68
+    }
+  },
+  "iteration_accuracies_top5": {
+    "1": {
+      "total": 100,
+      "passed": 0,
+      "accuracy": 0.0
+    },
+    "2": {
+      "total": 100,
+      "passed": 40,
+      "accuracy": 0.4
+    },
+    "3": {
+      "total": 100,
+      "passed": 64,
+      "accuracy": 0.64
+    },
+    "4": {
+      "total": 100,
+      "passed": 71,
+      "accuracy": 0.71
+    },
+    "5": {
+      "total": 100,
+      "passed": 71,
+      "accuracy": 0.71
+    },
+    "6": {
+      "total": 100,
+      "passed": 71,
+      "accuracy": 0.71
+    },
+    "7": {
+      "total": 100,
+      "passed": 71,
+      "accuracy": 0.71
+    },
+    "8": {
+      "total": 100,
+      "passed": 71,
+      "accuracy": 0.71
+    },
+    "9": {
+      "total": 100,
+      "passed": 71,
+      "accuracy": 0.71
+    },
+    "10": {
+      "total": 100,
+      "passed": 71,
+      "accuracy": 0.71
+    }
+  },
+  "found_at_iteration_distribution": {
+    "2": 40,
+    "3": 24,
+    "4": 7
+  },
+  "avg_found_iteration": 2.535211267605634,
+  "found_at_top1_iteration_distribution": {
+    "2": 31,
+    "3": 27,
+    "4": 7
+  },
+  "avg_found_top1_iteration": 2.6307692307692307,
+  "found_at_top3_iteration_distribution": {
+    "2": 35,
+    "3": 26,
+    "4": 7
+  },
+  "avg_found_top3_iteration": 2.588235294117647,
+  "found_at_top5_iteration_distribution": {
+    "2": 40,
+    "3": 24,
+    "4": 7
+  },
+  "avg_found_top5_iteration": 2.535211267605634,
+  "stopped_at_iteration_distribution": {
+    "3": 23,
+    "4": 1,
+    "5": 20,
+    "6": 18,
+    "7": 3,
+    "8": 2,
+    "9": 10,
+    "10": 23
+  },
+  "avg_stopped_iteration": 6.38,
+  "final_top1_accuracy": 0.47,
+  "final_top3_accuracy": 0.48,
+  "final_top5_accuracy": 0.48,
+  "final_accuracy": 0.48,
+  "max_iterations": 10,
+  "timestamp": "2026-01-21T22:39:56.119502",
+  "output_file": "/Users/z3548881/Desktop/TourRAG/TourRAG_code/tests/test_rag_results_iter10_20260121_212459.jsonl"
+}

@@ -94,16 +94,16 @@ def create_system_architecture_diagram(output_path: str = 'tourrag_architecture.
     
     # Layer 1: User Input (top)
     input_y = 9
-    ax.text(5, input_y + 0.3, 'User Input', ha='center', va='bottom', fontsize=16, fontweight='bold')
+    ax.text(5, input_y + 0.3, 'User Input', ha='center', va='bottom', fontsize=22, fontweight='bold')
     
     # Input boxes
     text_input = FancyBboxPatch((2, input_y - 0.4), 1.5, 0.6, **input_style)
     ax.add_patch(text_input)
-    ax.text(2.75, input_y - 0.1, 'Text Query', ha='center', va='center', fontsize=11)
+    ax.text(2.75, input_y - 0.1, 'Text Query', ha='center', va='center', fontsize=15)
     
     image_input = FancyBboxPatch((6.5, input_y - 0.4), 1.5, 0.6, **input_style)
     ax.add_patch(image_input)
-    ax.text(7.25, input_y - 0.1, 'Image', ha='center', va='center', fontsize=11)
+    ax.text(7.25, input_y - 0.1, 'Image', ha='center', va='center', fontsize=15)
     
     # Layer 2: Query Intent Extraction
     extract_y = 7.5
@@ -111,9 +111,9 @@ def create_system_architecture_diagram(output_path: str = 'tourrag_architecture.
     extract_box.set_facecolor(color_extract)
     ax.add_patch(extract_box)
     ax.text(5, extract_y, 'Query Intent Extraction\n(MCP Tool)', ha='center', va='center', 
-            fontsize=12, fontweight='bold')
+            fontsize=18, fontweight='bold')
     ax.text(5, extract_y - 0.35, 'name_candidates, query_tags, season_hint, geo_hints', 
-            ha='center', va='center', fontsize=9, style='italic')
+            ha='center', va='center', fontsize=13, style='italic')
     
     # Arrows from input to extraction
     arrow1 = FancyArrowPatch((2.75, input_y - 0.4), (4.5, extract_y + 0.3), 
@@ -129,9 +129,9 @@ def create_system_architecture_diagram(output_path: str = 'tourrag_architecture.
     retrieval_box.set_facecolor(color_retrieval)
     ax.add_patch(retrieval_box)
     ax.text(2.25, retrieval_y, 'In-DB Retrieval', ha='center', va='center', 
-            fontsize=12, fontweight='bold')
+            fontsize=18, fontweight='bold')
     ax.text(2.25, retrieval_y - 0.35, 'SQL Queries\nPostgreSQL', 
-            ha='center', va='center', fontsize=9, style='italic')
+            ha='center', va='center', fontsize=13, style='italic')
     
     # Arrow from extraction to retrieval
     arrow3 = FancyArrowPatch((4.5, extract_y - 0.5), (3, retrieval_y + 0.3), 
@@ -144,9 +144,9 @@ def create_system_architecture_diagram(output_path: str = 'tourrag_architecture.
     enrichment_box.set_facecolor(color_enrichment)
     ax.add_patch(enrichment_box)
     ax.text(7.75, enrichment_y, 'External Enrichment', ha='center', va='center', 
-            fontsize=12, fontweight='bold')
+            fontsize=18, fontweight='bold')
     ax.text(7.75, enrichment_y - 0.35, 'Wikipedia\nWikidata\nCommons', 
-            ha='center', va='center', fontsize=9, style='italic')
+            ha='center', va='center', fontsize=13, style='italic')
     
     # Arrow from extraction to enrichment
     arrow4 = FancyArrowPatch((5.5, extract_y - 0.5), (7, enrichment_y + 0.3), 
@@ -159,9 +159,9 @@ def create_system_architecture_diagram(output_path: str = 'tourrag_architecture.
     llm_box.set_facecolor(color_llm)
     ax.add_patch(llm_box)
     ax.text(5, llm_y, 'LLM Fusion & Ranking', ha='center', va='center', 
-            fontsize=12, fontweight='bold')
+            fontsize=18, fontweight='bold')
     ax.text(5, llm_y - 0.35, 'Tag overlap, Season matching, Confidence scoring', 
-            ha='center', va='center', fontsize=9, style='italic')
+            ha='center', va='center', fontsize=13, style='italic')
     
     # Arrows from retrieval and enrichment to LLM
     arrow5 = FancyArrowPatch((2.25, retrieval_y - 0.5), (4.5, llm_y + 0.3), 
@@ -177,9 +177,9 @@ def create_system_architecture_diagram(output_path: str = 'tourrag_architecture.
     output_box.set_facecolor(color_output)
     ax.add_patch(output_box)
     ax.text(5, output_y, 'Final Results', ha='center', va='center', 
-            fontsize=12, fontweight='bold')
+            fontsize=18, fontweight='bold')
     ax.text(5, output_y - 0.35, 'Top-K Viewpoints\nwith Evidence & Confidence', 
-            ha='center', va='center', fontsize=9, style='italic')
+            ha='center', va='center', fontsize=13, style='italic')
     
     # Arrow from LLM to output
     arrow7 = FancyArrowPatch((5, llm_y - 0.5), (5, output_y + 0.3), 
@@ -191,7 +191,7 @@ def create_system_architecture_diagram(output_path: str = 'tourrag_architecture.
                            boxstyle="round,pad=0.1", facecolor='#BBDEFB', 
                            edgecolor=color_border, linewidth=1.5)
     ax.add_patch(db_box)
-    ax.text(0.5, retrieval_y, 'DB', ha='center', va='center', fontsize=10, fontweight='bold')
+    ax.text(0.5, retrieval_y, 'DB', ha='center', va='center', fontsize=14, fontweight='bold')
     
     # Add connection line from DB to retrieval
     db_line = FancyArrowPatch((0.8, retrieval_y), (1, retrieval_y), 
@@ -200,13 +200,13 @@ def create_system_architecture_diagram(output_path: str = 'tourrag_architecture.
     
     # Add title
     ax.text(5, 9.8, 'TourRAG System Architecture', ha='center', va='top', 
-            fontsize=18, fontweight='bold')
+            fontsize=26, fontweight='bold')
     
     # Add legend/notes at bottom
     notes_y = 0.5
     ax.text(5, notes_y, 
             'All data sources are pre-fetched and stored locally | Tag-driven retrieval | Full explainability', 
-            ha='center', va='center', fontsize=9, style='italic', 
+            ha='center', va='center', fontsize=13, style='italic', 
             bbox=dict(boxstyle="round,pad=0.3", facecolor='#FAFAFA', edgecolor='gray', alpha=0.5))
     
     # Save figure
@@ -418,7 +418,7 @@ def create_world_map_from_database(output_path: str = 'viewpoint_world_map.png',
         
         # Title
         title = 'TourRAG Viewpoint Geographic Distribution'
-        ax.set_title(title, fontsize=16, fontweight='bold', pad=20)
+        ax.set_title(title, fontsize=22, fontweight='bold', pad=20)
         
     elif world is not None and isinstance(world, gpd.GeoDataFrame):
         fig, ax = plt.subplots(1, 1, figsize=(16, 10))
@@ -441,12 +441,12 @@ def create_world_map_from_database(output_path: str = 'viewpoint_world_map.png',
         
         # Add grid
         ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
-        ax.set_xlabel('Longitude', fontsize=12)
-        ax.set_ylabel('Latitude', fontsize=12)
+        ax.set_xlabel('Longitude', fontsize=16)
+        ax.set_ylabel('Latitude', fontsize=16)
         
         # Title
         title = 'TourRAG Viewpoint Geographic Distribution'
-        ax.set_title(title, fontsize=16, fontweight='bold', pad=20)
+        ax.set_title(title, fontsize=22, fontweight='bold', pad=20)
         
     else:
         # Fallback: Simple scatter plot without world map
@@ -467,17 +467,17 @@ def create_world_map_from_database(output_path: str = 'viewpoint_world_map.png',
         
         # Add grid
         ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
-        ax.set_xlabel('Longitude', fontsize=12)
-        ax.set_ylabel('Latitude', fontsize=12)
+        ax.set_xlabel('Longitude', fontsize=16)
+        ax.set_ylabel('Latitude', fontsize=16)
         
         # Title
         title = 'TourRAG Viewpoint Geographic Distribution'
-        ax.set_title(title, fontsize=16, fontweight='bold', pad=20)
+        ax.set_title(title, fontsize=22, fontweight='bold', pad=20)
         
         # Note about missing world map
         ax.text(0.5, 0.02, 
                 'Note: World map background not available. Install geopandas for full map visualization.',
-                transform=ax.transAxes, ha='center', fontsize=9, style='italic',
+                transform=ax.transAxes, ha='center', fontsize=13, style='italic',
                 bbox=dict(boxstyle="round,pad=0.3", facecolor='#FFF9C4', edgecolor='gray', alpha=0.7))
     
     # Add statistics text box
@@ -488,7 +488,7 @@ def create_world_map_from_database(output_path: str = 'viewpoint_world_map.png',
     
     ax.text(0.02, 0.98, stats_text,
             transform=ax.transAxes,
-            fontsize=10,
+            fontsize=14,
             verticalalignment='top',
             bbox=dict(boxstyle="round,pad=0.5", facecolor='white', edgecolor='gray', alpha=0.8))
     

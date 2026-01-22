@@ -51,6 +51,19 @@ if static_dir.exists():
 LOCAL_IMAGE_DIR = Path(__file__).parent.parent / "exports" / "images" / "all_image"
 LOCAL_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 
+SATELLITE_DIR_CANDIDATES = [
+    Path(__file__).parent.parent / "high_res_images",
+    Path(__file__).parent.parent / "exports" / "high_res_images"
+]
+SATELLITE_ALLOWED_DIRS = {
+    "1_attraction_highres",
+    "2_context_highres",
+    "3_attraction_highres_marked",
+    "4_context_highres_marked",
+    "5_attraction_highres_bbox",
+    "6_context_highres_bbox"
+}
+
 
 def _find_local_images(viewpoint_id: int) -> List[Path]:
     if not LOCAL_IMAGE_DIR.exists():
@@ -71,6 +84,81 @@ def _find_local_images(viewpoint_id: int) -> List[Path]:
             seen.add(path.name)
             unique_matches.append(path)
     return unique_matches
+
+
+def _get_satellite_base_dir() -> Optional[Path]:
+    for candidate in SATELLITE_DIR_CANDIDATES:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _find_satellite_annotation(osm_id: Optional[int], viewpoint_id: Optional[int] = None) -> Optional[Path]:
+    base_dir = _get_satellite_base_dir()
+    if not base_dir:
+        return None
+    annotations_dir = base_dir / "annotations"
+    if not annotations_dir.exists():
+        return None
+    patterns = []
+    if osm_id:
+        patterns.append(f"{osm_id}_*.json")
+    if viewpoint_id:
+        patterns.append(f"{viewpoint_id}_*.json")
+    for pattern in patterns:
+        matches = sorted(annotations_dir.glob(pattern))
+        if matches:
+            return matches[0]
+    return None
+
+
+def _compute_bbox_normalized(polygon_coords: Optional[List[List[float]]]) -> Optional[List[float]]:
+    if not polygon_coords:
+        return None
+    xs = [coord[0] for coord in polygon_coords if isinstance(coord, list) and len(coord) >= 2]
+    ys = [coord[1] for coord in polygon_coords if isinstance(coord, list) and len(coord) >= 2]
+    if not xs or not ys:
+        return None
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def _build_satellite_images(annotation: dict) -> List[dict]:
+    base_dir = _get_satellite_base_dir()
+    if not base_dir:
+        return []
+    images: List[dict] = []
+
+    for variant in annotation.get("variants", []):
+        img_info = variant.get("images", {}).get("attraction", {})
+        filename = img_info.get("filename")
+        polygon = img_info.get("polygon_normalized_coords")
+        if not filename or not polygon:
+            continue
+        images.append({
+            "type": "attraction",
+            "variant_index": variant.get("variant_index"),
+            "filename": filename,
+            "url": f"/api/v1/satellite-image/1_attraction_highres/{filename}",
+            "polygon_normalized_coords": polygon,
+            "bbox_normalized": _compute_bbox_normalized(polygon),
+            "caption": f"Attraction variant {variant.get('variant_index', 0) + 1}"
+        })
+
+    original_context = annotation.get("original_context")
+    if isinstance(original_context, dict):
+        ctx_filename = original_context.get("filename")
+        ctx_polygon = original_context.get("polygon_normalized_coords")
+        if ctx_filename and ctx_polygon:
+            images.append({
+                "type": "context",
+                "filename": ctx_filename,
+                "url": f"/api/v1/satellite-image/2_context_highres/{ctx_filename}",
+                "polygon_normalized_coords": ctx_polygon,
+                "bbox_normalized": _compute_bbox_normalized(ctx_polygon),
+                "caption": "Context (original)"
+            })
+
+    return images
 
 
 @app.get("/")
@@ -446,7 +534,7 @@ async def get_viewpoint_detail(viewpoint_id: int):
         cursor.execute("""
             SELECT 
                 viewpoint_id, name_primary, name_variants,
-                category_norm, category_osm, geom, popularity
+                category_norm, category_osm, geom, popularity, osm_id
             FROM viewpoint_entity
             WHERE viewpoint_id = %s
         """, (viewpoint_id,))
@@ -456,6 +544,15 @@ async def get_viewpoint_detail(viewpoint_id: int):
         raise HTTPException(status_code=404, detail="Viewpoint not found")
     
     local_images = _find_local_images(viewpoint_id)
+    satellite_images: List[dict] = []
+    annotation_path = _find_satellite_annotation(entity.get("osm_id"), entity.get("viewpoint_id"))
+    if annotation_path and annotation_path.exists():
+        try:
+            with annotation_path.open("r", encoding="utf-8") as f:
+                annotation = json.load(f)
+            satellite_images = _build_satellite_images(annotation)
+        except Exception as exc:
+            print(f"Failed to load satellite annotation {annotation_path}: {exc}")
     return {
         "viewpoint_id": entity['viewpoint_id'],
         "name_primary": entity['name_primary'],
@@ -474,6 +571,7 @@ async def get_viewpoint_detail(viewpoint_id: int):
             }
             for path in local_images
         ],
+        "satellite_images": satellite_images,
         "historical_summary": historical_summary,
         "historical_evidence": [e.model_dump() for e in historical_evidence]
     }
@@ -629,6 +727,27 @@ async def get_viewpoint_local_image(viewpoint_id: int, filename: str):
     image_path = image_map.get(filename)
     if not image_path or not image_path.exists():
         raise HTTPException(status_code=404, detail="Local image not found")
+
+    return FileResponse(str(image_path))
+
+
+@app.get("/api/v1/satellite-image/{subdir}/{filename}")
+async def get_satellite_image(subdir: str, filename: str):
+    """
+    Serve a satellite image file from the configured output directory.
+    """
+    if "/" in filename or ".." in filename or "/" in subdir or ".." in subdir:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if subdir not in SATELLITE_ALLOWED_DIRS:
+        raise HTTPException(status_code=400, detail="Invalid directory")
+
+    base_dir = _get_satellite_base_dir()
+    if not base_dir:
+        raise HTTPException(status_code=404, detail="Satellite directory not found")
+
+    image_path = base_dir / subdir / filename
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="Satellite image not found")
 
     return FileResponse(str(image_path))
 
