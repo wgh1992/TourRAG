@@ -79,6 +79,13 @@ uvicorn app.main:app --reload
 
 启动服务后访问：http://localhost:8000/docs
 
+
+# 进入项目目录
+cd /Users/z3548881/Desktop/TourRAG/TourRAG_code
+
+# 运行服务器
+uvicorn app.main:app --host 0.0.0.0 --port 8008 --reload
+
 ## 项目结构
 
 ```

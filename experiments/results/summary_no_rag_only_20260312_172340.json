@@ -1,0 +1,11 @@
+{
+  "timestamp": "20260312_172340",
+  "no_rag_only": true,
+  "input_csv": "/Users/z3548881/Desktop/TourRAG/TourRAG_code/tests/test_set_input.csv",
+  "output_jsonl": "/Users/z3548881/Desktop/TourRAG/TourRAG_code/experiments/results/no_rag_only_20260312_172340.jsonl",
+  "output_csv": "/Users/z3548881/Desktop/TourRAG/TourRAG_code/experiments/results/no_rag_only_20260312_172340.csv",
+  "total_rows": 100,
+  "total_with_target_id": 100,
+  "no_rag_text_hit_rate": 0.16,
+  "no_rag_text_hits": 16
+}
