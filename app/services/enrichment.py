@@ -4,8 +4,47 @@ External Enrichment Service
 Enriches candidate viewpoints with local Wikipedia/Wikidata/Commons data.
 """
 from typing import List, Dict, Any, Optional
+import struct
 from app.services.database import db
 from app.schemas.query import Evidence
+
+
+def _parse_ewkb_point(geom_value) -> Optional[Dict[str, Any]]:
+    if geom_value is None:
+        return None
+
+    if isinstance(geom_value, memoryview):
+        geom_bytes = geom_value.tobytes()
+    elif isinstance(geom_value, bytes):
+        geom_bytes = geom_value
+    else:
+        geom_text = str(geom_value).strip()
+        if geom_text.startswith("\\x"):
+            geom_text = geom_text[2:]
+        try:
+            geom_bytes = bytes.fromhex(geom_text)
+        except ValueError:
+            return None
+
+    if len(geom_bytes) < 21:
+        return None
+
+    endian = "<" if geom_bytes[0] == 1 else ">"
+    geom_type = struct.unpack(endian + "I", geom_bytes[1:5])[0]
+    has_srid = bool(geom_type & 0x20000000)
+    base_type = geom_type & 0x000000FF
+    if base_type != 1:
+        return None
+
+    offset = 9 if has_srid else 5
+    if len(geom_bytes) < offset + 16:
+        return None
+
+    longitude, latitude = struct.unpack(endian + "dd", geom_bytes[offset:offset + 16])
+    return {
+        "type": "Point",
+        "coordinates": [longitude, latitude]
+    }
 
 
 class EnrichmentService:
@@ -172,7 +211,7 @@ class EnrichmentService:
                         hash,
                         license,
                         image_blob,
-                        ST_AsGeoJSON(image_geometry)::jsonb as image_geometry,
+                        image_geometry,
                         image_exif,
                         image_width,
                         image_height,
@@ -196,7 +235,7 @@ class EnrichmentService:
                         timestamp,
                         hash,
                         license,
-                        ST_AsGeoJSON(image_geometry)::jsonb as image_geometry,
+                        image_geometry,
                         image_exif,
                         image_width,
                         image_height,
@@ -233,7 +272,7 @@ class EnrichmentService:
                 # Add geolocation if available
                 if row.get('image_geometry'):
                     geom = row['image_geometry']
-                    if geom and 'coordinates' in geom:
+                    if isinstance(geom, dict) and 'coordinates' in geom:
                         # GeoJSON format: [lng, lat]
                         coords = geom['coordinates']
                         asset['geolocation'] = {
@@ -241,6 +280,15 @@ class EnrichmentService:
                             "latitude": coords[1],
                             "geometry": geom
                         }
+                    else:
+                        parsed_geom = _parse_ewkb_point(geom)
+                        if parsed_geom:
+                            coords = parsed_geom['coordinates']
+                            asset['geolocation'] = {
+                                "longitude": coords[0],
+                                "latitude": coords[1],
+                                "geometry": parsed_geom
+                            }
                 
                 # Add EXIF metadata summary (not full data to avoid large responses)
                 if row.get('image_exif'):

@@ -6,6 +6,7 @@ Main entry point for the viewpoint RAG system.
 import time
 import os
 import json
+import struct
 from pathlib import Path
 from typing import Optional, List
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
@@ -47,13 +48,17 @@ static_dir = Path(__file__).parent.parent / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-# Local image directory (exports/images/all_image)
-LOCAL_IMAGE_DIR = Path(__file__).parent.parent / "exports" / "images" / "all_image"
+# Local image directories. Keep the export path first, then support downloaded image packs.
+LOCAL_IMAGE_DIR_CANDIDATES = [
+    Path(__file__).parent.parent / "exports" / "images" / "all_image",
+    Path(__file__).parent.parent / "download" / "images-3" / "images",
+]
 LOCAL_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 
 SATELLITE_DIR_CANDIDATES = [
     Path(__file__).parent.parent / "high_res_images",
-    Path(__file__).parent.parent / "exports" / "high_res_images"
+    Path(__file__).parent.parent / "exports" / "high_res_images",
+    Path(__file__).parent.parent / "download" / "cv_liu_yu-20260606T121333Z-3-001" / "cv_liu_yu" / "high_res_images"
 ]
 SATELLITE_ALLOWED_DIRS = {
     "1_attraction_highres",
@@ -66,16 +71,16 @@ SATELLITE_ALLOWED_DIRS = {
 
 
 def _find_local_images(viewpoint_id: int) -> List[Path]:
-    if not LOCAL_IMAGE_DIR.exists():
-        return []
-
     matches: List[Path] = []
-    for ext in LOCAL_IMAGE_EXTS:
-        direct = LOCAL_IMAGE_DIR / f"{viewpoint_id}{ext}"
-        if direct.exists():
-            matches.append(direct)
-        matches.extend(sorted(LOCAL_IMAGE_DIR.glob(f"{viewpoint_id}_*{ext}")))
-        matches.extend(sorted(LOCAL_IMAGE_DIR.glob(f"{viewpoint_id}-*{ext}")))
+    for image_dir in LOCAL_IMAGE_DIR_CANDIDATES:
+        if not image_dir.exists():
+            continue
+        for ext in LOCAL_IMAGE_EXTS:
+            direct = image_dir / f"{viewpoint_id}{ext}"
+            if direct.exists():
+                matches.append(direct)
+            matches.extend(sorted(image_dir.glob(f"{viewpoint_id}_*{ext}")))
+            matches.extend(sorted(image_dir.glob(f"{viewpoint_id}-*{ext}")))
 
     seen = set()
     unique_matches = []
@@ -84,6 +89,38 @@ def _find_local_images(viewpoint_id: int) -> List[Path]:
             seen.add(path.name)
             unique_matches.append(path)
     return unique_matches
+
+
+def _fix_text_encoding(value):
+    if isinstance(value, str):
+        for encoding in ("cp1252", "latin1"):
+            try:
+                decoded = value.encode(encoding).decode("utf-8")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                continue
+            if decoded != value:
+                return decoded
+        return value
+    if isinstance(value, list):
+        return [_fix_text_encoding(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _fix_text_encoding(item) for key, item in value.items()}
+    return value
+
+
+def _display_name(name_primary: Optional[str], name_variants: Optional[dict]) -> str:
+    fixed_primary = _fix_text_encoding(name_primary) if name_primary else None
+    fixed_variants = _fix_text_encoding(name_variants or {})
+
+    if fixed_primary:
+        return fixed_primary
+
+    for key in ("name:ckb", "name:ku", "name:ar", "name:fa", "name:tr", "name:zh", "name:ja", "name:ko"):
+        local_name = fixed_variants.get(key)
+        if local_name:
+            return local_name
+
+    return "Unnamed"
 
 
 def _get_satellite_base_dir() -> Optional[Path]:
@@ -120,6 +157,62 @@ def _compute_bbox_normalized(polygon_coords: Optional[List[List[float]]]) -> Opt
     if not xs or not ys:
         return None
     return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def _parse_ewkb_point(geom_value) -> Optional[tuple[float, float]]:
+    """Parse a PostGIS EWKB POINT value stored as hex text or bytes."""
+    if geom_value is None:
+        return None
+
+    if isinstance(geom_value, memoryview):
+        geom_bytes = geom_value.tobytes()
+    elif isinstance(geom_value, bytes):
+        geom_bytes = geom_value
+    else:
+        geom_text = str(geom_value).strip()
+        if geom_text.startswith("\\x"):
+            geom_text = geom_text[2:]
+        try:
+            geom_bytes = bytes.fromhex(geom_text)
+        except ValueError:
+            return None
+
+    if len(geom_bytes) < 21:
+        return None
+
+    endian = "<" if geom_bytes[0] == 1 else ">"
+    geom_type = struct.unpack(endian + "I", geom_bytes[1:5])[0]
+    has_srid = bool(geom_type & 0x20000000)
+    base_type = geom_type & 0x000000FF
+    if base_type != 1:
+        return None
+
+    offset = 9 if has_srid else 5
+    if len(geom_bytes) < offset + 16:
+        return None
+
+    longitude, latitude = struct.unpack(endian + "dd", geom_bytes[offset:offset + 16])
+    return latitude, longitude
+
+
+def _format_map_viewpoints(rows) -> List[dict]:
+    viewpoints = []
+    for row in rows:
+        latitude = row.get("latitude")
+        longitude = row.get("longitude")
+        if latitude is None or longitude is None:
+            point = _parse_ewkb_point(row.get("geom"))
+            if not point:
+                continue
+            latitude, longitude = point
+
+        viewpoints.append({
+            "id": row["viewpoint_id"],
+            "n": _display_name(row.get("name_primary"), row.get("name_variants")),
+            "lat": float(latitude),
+            "lng": float(longitude)
+        })
+    return viewpoints
 
 
 def _build_satellite_images(annotation: dict) -> List[dict]:
@@ -555,14 +648,15 @@ async def get_viewpoint_detail(viewpoint_id: int):
             print(f"Failed to load satellite annotation {annotation_path}: {exc}")
     return {
         "viewpoint_id": entity['viewpoint_id'],
-        "name_primary": entity['name_primary'],
-        "name_variants": entity['name_variants'],
+        "name_primary": _display_name(entity.get('name_primary'), entity.get('name_variants')),
+        "name_original": _fix_text_encoding(entity['name_primary']),
+        "name_variants": _fix_text_encoding(entity['name_variants']),
         "category_norm": entity['category_norm'],
         "category_osm": entity['category_osm'],
         "popularity": float(entity['popularity']),
-        "wikipedia": wiki_data,
-        "wikidata": wikidata_data,
-        "visual_tags": visual_tags,
+        "wikipedia": _fix_text_encoding(wiki_data),
+        "wikidata": _fix_text_encoding(wikidata_data),
+        "visual_tags": _fix_text_encoding(visual_tags),
         "commons_assets": commons_assets,
         "local_images": [
             {
@@ -572,8 +666,8 @@ async def get_viewpoint_detail(viewpoint_id: int):
             for path in local_images
         ],
         "satellite_images": satellite_images,
-        "historical_summary": historical_summary,
-        "historical_evidence": [e.model_dump() for e in historical_evidence]
+        "historical_summary": _fix_text_encoding(historical_summary),
+        "historical_evidence": _fix_text_encoding([e.model_dump() for e in historical_evidence])
     }
 
 
@@ -587,42 +681,56 @@ async def get_viewpoints_for_map(
     
     Returns minimal data: only id, lat, lng, and name for fast rendering.
     """
-    with db.get_cursor() as cursor:
-        query = """
-            SELECT 
-                v.viewpoint_id,
-                v.name_primary,
-                ST_Y(v.geom::geometry) as latitude,
-                ST_X(v.geom::geometry) as longitude
-            FROM viewpoint_entity v
-            WHERE v.geom IS NOT NULL
-        """
-        
-        params = []
-        if min_popularity is not None:
-            query += " AND v.popularity >= %s"
-            params.append(min_popularity)
-        
-        query += " ORDER BY v.viewpoint_id"
-        
-        if limit:
-            query += " LIMIT %s"
-            params.append(limit)
-        
-        cursor.execute(query, params)
-        viewpoints = cursor.fetchall()
-    
-    # Return minimal data for fast rendering
+    base_query = """
+        FROM viewpoint_entity v
+        WHERE v.geom IS NOT NULL
+    """
+    params = []
+    if min_popularity is not None:
+        base_query += " AND v.popularity >= %s"
+        params.append(min_popularity)
+
+    order_limit = " ORDER BY v.viewpoint_id"
+    if limit:
+        order_limit += " LIMIT %s"
+        params.append(limit)
+
+    try:
+        with db.get_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    v.viewpoint_id,
+                    v.name_primary,
+                    v.name_variants,
+                    ST_Y(v.geom::geometry) as latitude,
+                    ST_X(v.geom::geometry) as longitude
+                """
+                + base_query
+                + order_limit,
+                params,
+            )
+            rows = cursor.fetchall()
+    except Exception as exc:
+        print(f"PostGIS map query failed, falling back to EWKB parsing: {exc}")
+        with db.get_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    v.viewpoint_id,
+                    v.name_primary,
+                    v.name_variants,
+                    v.geom
+                """
+                + base_query
+                + order_limit,
+                params,
+            )
+            rows = cursor.fetchall()
+
+    viewpoints = _format_map_viewpoints(rows)
     return {
-        "viewpoints": [
-            {
-                "id": v['viewpoint_id'],
-                "n": v['name_primary'] or 'Unnamed',
-                "lat": float(v['latitude']),
-                "lng": float(v['longitude'])
-            }
-            for v in viewpoints
-        ],
+        "viewpoints": viewpoints,
         "total": len(viewpoints)
     }
 

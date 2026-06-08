@@ -20,6 +20,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 def build_query_from_row(row: Dict[str, str]) -> str:
     """Build query string from CSV row (same logic as test_RAG.py)."""
+    explicit_query = (row.get("query_text") or "").strip()
+    if explicit_query:
+        return explicit_query
+
     history_summary = (row.get("history_summary") or "").strip()
     base_name = (row.get("viewpoint_base_name") or "").strip()
     season_info_raw = (row.get("season_info") or "").strip()

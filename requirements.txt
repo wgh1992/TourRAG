@@ -11,8 +11,7 @@ alembic==1.12.1
 
 # LLM & MCP
 openai==1.3.5
-# Note: MCP (Model Context Protocol) is a concept, not a Python package dependency
-# The system implements MCP-style tools but doesn't require the mcp package
+fastmcp>=3.0,<4
 
 # Image processing (for visual tag extraction)
 Pillow==10.1.0

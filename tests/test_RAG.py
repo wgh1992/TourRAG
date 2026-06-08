@@ -174,6 +174,10 @@ async def run_extract_and_search(query: str, image_path: Optional[Path], top_n: 
 
 
 def build_query_from_row(row: Dict[str, str]) -> str:
+    explicit_query = (row.get("query_text") or "").strip()
+    if explicit_query:
+        return explicit_query
+
     history_summary = (row.get("history_summary") or "").strip()
     base_name = (row.get("viewpoint_base_name") or "").strip()
     season_info_raw = (row.get("season_info") or "").strip()

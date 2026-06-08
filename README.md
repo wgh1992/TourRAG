@@ -110,3 +110,25 @@ TourRAG_code/
 
 MIT
 
+## FastMCP server
+
+TourRAG also exposes its retrieval tools as a FastMCP 3.x server.
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Run over Streamable HTTP:
+
+```bash
+python -m app.mcp_server --transport streamable-http --host 127.0.0.1 --port 8001
+```
+
+Run over stdio for local MCP clients:
+
+```bash
+python -m app.mcp_server --transport stdio
+```
+

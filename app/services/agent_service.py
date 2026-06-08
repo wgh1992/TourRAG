@@ -1245,6 +1245,86 @@ CRITICAL RULES:
             "iteration_snapshots": iteration_snapshots
         }
     
+    def _sync_execute_rank_and_explain(
+        self,
+        candidates: List[Dict[str, Any]],
+        query_intent_dict: Dict[str, Any],
+        top_k: int = 5,
+    ) -> Dict[str, Any]:
+        """Rank candidates and return explanations using the shared LLM service."""
+        if query_intent_dict is None:
+            query_intent_dict = {}
+        if not isinstance(query_intent_dict, dict):
+            query_intent_dict = {}
+
+        from app.schemas.query import QueryIntent, GeoHints, ViewpointCandidate
+        geo_hints_dict = query_intent_dict.get("geo_hints", {})
+        if not isinstance(geo_hints_dict, dict):
+            geo_hints_dict = {}
+
+        query_intent = QueryIntent(
+            name_candidates=query_intent_dict.get("name_candidates", []),
+            query_tags=query_intent_dict.get("query_tags", []),
+            season_hint=query_intent_dict.get("season_hint", "unknown"),
+            scene_hints=query_intent_dict.get("scene_hints", []),
+            geo_hints=GeoHints(
+                place_name=geo_hints_dict.get("place_name"),
+                country=geo_hints_dict.get("country"),
+            ),
+            confidence_notes=query_intent_dict.get("confidence_notes", []),
+        )
+
+        candidate_objects = []
+        for c in candidates:
+            candidate_objects.append(ViewpointCandidate(
+                viewpoint_id=c["viewpoint_id"],
+                name_primary=c["name_primary"],
+                name_variants=c.get("name_variants", {}),
+                category_norm=c.get("category_norm"),
+                name_score=c.get("name_score", 0.0),
+                geo_score=c.get("geo_score", 0.0),
+                category_score=c.get("category_score", 0.0),
+                popularity=c.get("popularity", 0.0),
+            ))
+
+        top_k_candidates = candidate_objects[:self.perfect_match_top_k] if candidate_objects else []
+        perfect_match_candidate = next((c for c in top_k_candidates if c.name_score >= 1.0), None)
+        has_perfect_match = perfect_match_candidate is not None
+        perfect_match_score = perfect_match_candidate.name_score if perfect_match_candidate else 0.0
+
+        top_candidate = candidate_objects[0] if candidate_objects else None
+        has_very_high_match = top_candidate and top_candidate.name_score > 0.8
+
+        results = self.llm_service.rank_and_fuse(
+            candidates=candidate_objects,
+            query_intent=query_intent,
+            top_k=top_k,
+        )
+
+        result_dict = {
+            "results": [r.model_dump() for r in results],
+            "count": len(results),
+            "candidates": [c.model_dump() for c in candidate_objects[:top_k]],
+        }
+
+        if has_perfect_match:
+            result_dict["_stop_signal"] = True
+            result_dict["_note"] = (
+                f"PERFECT MATCH FOUND in ranked results "
+                f"(name_score={perfect_match_score:.2f}) in top "
+                f"{self.perfect_match_top_k} candidates! You should STOP "
+                f"searching and provide the final answer immediately."
+            )
+        elif has_very_high_match:
+            result_dict["_stop_signal"] = True
+            result_dict["_note"] = (
+                f"VERY HIGH MATCH FOUND in ranked results "
+                f"(name_score={top_candidate.name_score:.2f})! You should "
+                f"STOP searching and provide the final answer."
+            )
+
+        return result_dict
+
     async def _execute_tool(self, function_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a tool function and return the result"""
         
@@ -1348,82 +1428,11 @@ CRITICAL RULES:
             }
         
         elif function_name == "rank_and_explain_results":
-            # This would use the LLM service to rank results
-            # For now, return a simplified version
-            candidates = arguments.get("candidates", [])
-            query_intent_dict = arguments.get("query_intent", {})
-            top_k = arguments.get("top_k", 5)
-            
-            # Handle case where query_intent might be None or not a dict
-            if query_intent_dict is None:
-                query_intent_dict = {}
-            if not isinstance(query_intent_dict, dict):
-                query_intent_dict = {}
-            
-            from app.schemas.query import QueryIntent, GeoHints, ViewpointCandidate
-            geo_hints_dict = query_intent_dict.get("geo_hints", {})
-            if not isinstance(geo_hints_dict, dict):
-                geo_hints_dict = {}
-            
-            query_intent = QueryIntent(
-                name_candidates=query_intent_dict.get("name_candidates", []),
-                query_tags=query_intent_dict.get("query_tags", []),
-                season_hint=query_intent_dict.get("season_hint", "unknown"),
-                scene_hints=query_intent_dict.get("scene_hints", []),
-                geo_hints=GeoHints(
-                    place_name=geo_hints_dict.get("place_name") if isinstance(geo_hints_dict, dict) else None,
-                    country=geo_hints_dict.get("country") if isinstance(geo_hints_dict, dict) else None
-                ),
-                confidence_notes=query_intent_dict.get("confidence_notes", [])
+            return self._sync_execute_rank_and_explain(
+                candidates=arguments.get("candidates", []),
+                query_intent_dict=arguments.get("query_intent", {}),
+                top_k=arguments.get("top_k", 5),
             )
-            
-            # Convert candidates to ViewpointCandidate objects
-            candidate_objects = []
-            for c in candidates:
-                candidate_objects.append(ViewpointCandidate(
-                    viewpoint_id=c['viewpoint_id'],
-                    name_primary=c['name_primary'],
-                    name_variants=c.get('name_variants', {}),
-                    category_norm=c.get('category_norm'),
-                    name_score=c.get('name_score', 0.0),
-                    geo_score=c.get('geo_score', 0.0),
-                    category_score=c.get('category_score', 0.0),
-                    popularity=c.get('popularity', 0.0)
-                ))
-            
-            # Check for perfect match BEFORE ranking (check top K candidates)
-            top_k_candidates = candidate_objects[:self.perfect_match_top_k] if candidate_objects else []
-            # Check if any candidate in top K has perfect match (name_score >= 1.0)
-            perfect_match_candidate = next((c for c in top_k_candidates if c.name_score >= 1.0), None)
-            has_perfect_match = perfect_match_candidate is not None
-            perfect_match_score = perfect_match_candidate.name_score if perfect_match_candidate else 0.0
-            
-            # Check top candidate for very high match
-            top_candidate = candidate_objects[0] if candidate_objects else None
-            has_very_high_match = top_candidate and top_candidate.name_score > 0.8
-            
-            # Use LLM service to rank
-            results = self.llm_service.rank_and_fuse(
-                candidates=candidate_objects,
-                query_intent=query_intent,
-                top_k=top_k
-            )
-            
-            result_dict = {
-                "results": [r.model_dump() for r in results],
-                "count": len(results),
-                "candidates": [c.model_dump() for c in candidate_objects[:top_k]]  # Include original candidates with scores
-            }
-            
-            # Add stop signal if perfect or very high match found
-            if has_perfect_match:
-                result_dict["_stop_signal"] = True
-                result_dict["_note"] = f"PERFECT MATCH FOUND in ranked results (name_score={perfect_match_score:.2f}) in top {self.perfect_match_top_k} candidates! You should STOP searching and provide the final answer immediately."
-            elif has_very_high_match:
-                result_dict["_stop_signal"] = True
-                result_dict["_note"] = f"VERY HIGH MATCH FOUND in ranked results (name_score={top_candidate.name_score:.2f})! You should STOP searching and provide the final answer."
-            
-            return result_dict
         
         else:
             return {"error": f"Unknown tool: {function_name}"}
