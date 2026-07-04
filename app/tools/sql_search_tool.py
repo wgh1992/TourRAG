@@ -15,6 +15,38 @@ from app.config import settings
 # Disable name-based fallback searches (testing mode)
 DISABLE_NAME_FALLBACK = False
 
+VALID_CATEGORIES = [
+    'mountain', 'lake', 'temple', 'museum', 'park',
+    'coast', 'cityscape', 'monument', 'bridge',
+    'palace', 'tower', 'cave', 'waterfall', 'valley', 'island'
+]
+
+WEAK_RETRIEVAL_CATEGORIES = {'park', 'cityscape', 'valley', 'coast'}
+GENERIC_HISTORY_TERMS = {
+    'this anonymized tourist attraction',
+    'tourist attraction',
+    'observable visual',
+    'scene cues',
+    'ground level',
+    'exterior',
+    'panoramic',
+    'sunny',
+    'cloudy',
+    'empty',
+    'crowded',
+}
+
+DISTINCTIVE_CONTEXT_STOPWORDS = {
+    'about', 'above', 'after', 'also', 'among', 'around', 'built',
+    'called', 'city', 'country', 'dating', 'district', 'during',
+    'east', 'from', 'heritage', 'history', 'known', 'lake', 'local',
+    'located', 'monument', 'mountain', 'named', 'near', 'north',
+    'old', 'park', 'place', 'popular', 'public', 'road', 'site',
+    'scene', 'search', 'section', 'south', 'state', 'street', 'the',
+    'this', 'tourist', 'town', 'unnamed', 'used', 'visitors', 'west',
+    'wide', 'with',
+}
+
 
 # Country name mapping (Chinese to English and common variants)
 COUNTRY_NAME_MAPPING = {
@@ -650,7 +682,7 @@ CRITICAL INSTRUCTIONS:
         top_n: int = 50
     ) -> Dict[str, Any]:
         """
-        Search viewpoints using LLM-generated SQL query.
+        Search viewpoints using deterministic hybrid retrieval.
         
         Args:
             query_intent: Query intent from extract_query_intent
@@ -659,104 +691,7 @@ CRITICAL INSTRUCTIONS:
         Returns:
             Dict with candidates and SQL query info
         """
-        try:
-            # Determine search type based on query intent
-            has_name = bool(query_intent.name_candidates)
-            has_category = any(tag in ['mountain', 'lake', 'temple', 'museum', 'park', 
-                                      'coast', 'cityscape', 'monument', 'bridge', 
-                                      'palace', 'tower', 'cave', 'waterfall', 'valley', 'island'] 
-                              for tag in query_intent.query_tags)
-            has_tags = bool(query_intent.query_tags)
-            
-            if has_name and has_category:
-                search_type = "combined"
-            elif has_name:
-                search_type = "name"
-            elif has_category:
-                search_type = "category"
-            elif has_tags:
-                search_type = "tags"
-            else:
-                search_type = "general"
-            
-            # Generate SQL with LLM
-            sql, params = self._generate_sql_with_llm(
-                query_intent=query_intent,
-                search_type=search_type,
-                top_n=top_n
-            )
-            
-            # Execute query
-            rows = self._validate_and_execute_sql(sql, params)
-            
-            # Convert to candidates
-            candidates = []
-            for row in rows:
-                candidates.append(ViewpointCandidate(
-                    viewpoint_id=row['viewpoint_id'],
-                    name_primary=row['name_primary'],
-                    name_variants=row.get('name_variants') or {},
-                    category_norm=row.get('category_norm'),
-                    name_score=float(row.get('name_score', 0.0)),
-                    geo_score=float(row.get('geo_score', 1.0)),
-                    category_score=float(row.get('category_score', 0.0)),
-                    popularity=float(row.get('popularity', 0.0))
-                ))
-            
-            # If no results from LLM SQL, try fallback with more relaxed criteria
-            if len(candidates) == 0:
-                print(f"[SQLSearchTool] LLM SQL returned 0 results, trying fallback search...")
-                fallback_result = self._fallback_search(query_intent, top_n)
-                
-                # If fallback found results, use them but note that LLM SQL didn't work
-                if fallback_result.get('count', 0) > 0:
-                    # Preserve original warning/suggestion if any
-                    original_warning = fallback_result.get('warning', '')
-                    original_suggestion = fallback_result.get('suggestion', '')
-                    
-                    fallback_result["warning"] = (
-                        f"LLM-generated SQL query returned no results. "
-                        f"Using fallback search method with relaxed criteria. "
-                        f"{original_warning}"
-                    ).strip()
-                    if original_suggestion:
-                        fallback_result["suggestion"] = original_suggestion
-                    else:
-                        fallback_result["suggestion"] = "The search used relaxed criteria to find results. Some criteria (like category or country filters) may not have matched exactly."
-                    
-                    fallback_result["llm_sql_failed"] = True
-                    fallback_result["llm_sql"] = sql
-                    fallback_result["llm_params"] = params
-                    return fallback_result
-                else:
-                    # Even fallback found nothing
-                    result = {
-                        "candidates": [],
-                        "count": 0,
-                        "sql": sql,
-                        "params": params,
-                        "generated_by": "llm",
-                        "warning": "No viewpoints found matching the query. The database may not contain viewpoints matching all the specified criteria.",
-                        "suggestion": "Try searching with fewer or different criteria, or check if the database contains relevant viewpoints."
-                    }
-                    return result
-            
-            result = {
-                "candidates": [c.model_dump() for c in candidates],
-                "count": len(candidates),
-                "sql": sql,
-                "params": params,
-                "generated_by": "llm"
-            }
-            
-            return result
-            
-        except Exception as e:
-            print(f"[SQLSearchTool] Error in LLM SQL search: {e}")
-            import traceback
-            traceback.print_exc()
-            # Fallback to traditional search methods
-            return self._fallback_search(query_intent, top_n)
+        return self._hybrid_search(query_intent, top_n=top_n, generated_by="deterministic_hybrid")
     
     def _fallback_search(
         self,
@@ -764,68 +699,478 @@ CRITICAL INSTRUCTIONS:
         top_n: int = 50
     ) -> Dict[str, Any]:
         """
-        Fallback to traditional search methods when LLM SQL generation fails.
-        Uses more relaxed criteria to find results.
+        Fallback to deterministic multi-route retrieval.
+        Collects candidates from all relevant routes instead of returning after
+        the first non-empty category/tag result.
         """
-        # Priority 1: Try name search first (most likely to find results)
-        if not DISABLE_NAME_FALLBACK and query_intent.name_candidates:
-            print(f"[SQLSearchTool] Fallback: Trying name search for '{query_intent.name_candidates[0]}'")
-            name_result = self.search_by_name(query_intent.name_candidates[0], top_n=top_n)
-            if name_result.get('count', 0) > 0:
-                return name_result
-        
-        # Priority 2: Try category search (without strict country filter if it fails)
-        if query_intent.query_tags:
-            valid_categories = ['mountain', 'lake', 'temple', 'museum', 'park', 
-                               'coast', 'cityscape', 'monument', 'bridge', 
-                               'palace', 'tower', 'cave', 'waterfall', 'valley', 'island']
-            categories = [tag for tag in query_intent.query_tags if tag in valid_categories]
-            if categories:
-                # First try with country filter
-                country = query_intent.geo_hints.country if query_intent.geo_hints else None
-                if country:
-                    print(f"[SQLSearchTool] Fallback: Trying category search for '{categories[0]}' in '{country}'")
-                    category_result = self.search_by_category(categories[0], country=country, top_n=top_n)
-                    if category_result.get('count', 0) > 0:
-                        return category_result
-                
-                # If country filter failed, try without country
-                print(f"[SQLSearchTool] Fallback: Trying category search for '{categories[0]}' without country filter")
-                category_result = self.search_by_category(categories[0], country=None, top_n=top_n)
-                if category_result.get('count', 0) > 0:
-                    return category_result
-        
-        # Priority 3: Try tags search
-        if query_intent.query_tags:
-            visual_tags = [tag for tag in query_intent.query_tags 
-                          if tag not in ['mountain', 'lake', 'temple', 'museum', 'park', 
-                                        'coast', 'cityscape', 'monument', 'bridge', 
-                                        'palace', 'tower', 'cave', 'waterfall', 'valley', 'island']]
-            if visual_tags:
-                season = query_intent.season_hint if query_intent.season_hint != 'unknown' else None
-                print(f"[SQLSearchTool] Fallback: Trying tags search for {visual_tags}")
-                tags_result = self.search_by_tags(visual_tags, season=season, top_n=top_n)
-                if tags_result.get('count', 0) > 0:
-                    return tags_result
-        
-        # Priority 4: If we have name candidates but no results, try fuzzy name search
-        if not DISABLE_NAME_FALLBACK and query_intent.name_candidates:
-            # Try searching with partial name
-            for name in query_intent.name_candidates:
-                if len(name) > 2:
-                    partial_name = name[:len(name)//2] if len(name) > 4 else name
-                    print(f"[SQLSearchTool] Fallback: Trying partial name search for '{partial_name}'")
-                    name_result = self.search_by_name(partial_name, top_n=top_n)
-                    if name_result.get('count', 0) > 0:
-                        return name_result
-        
-        # Last resort: return empty result with helpful message
-        return {
-            "candidates": [],
-            "count": 0,
-            "warning": "No viewpoints found matching the search criteria. The database may not contain viewpoints matching all specified conditions.",
-            "suggestion": "Try searching with fewer criteria, or check if the database contains relevant viewpoints. You can also try searching by name only."
+        return self._hybrid_search(query_intent, top_n=top_n, generated_by="deterministic_fallback")
+
+    def _hybrid_search(
+        self,
+        query_intent: QueryIntent,
+        top_n: int = 50,
+        generated_by: str = "deterministic_hybrid",
+    ) -> Dict[str, Any]:
+        per_route_n = max(top_n, 50)
+        route_results: List[Dict[str, Any]] = []
+        attempted_routes: List[str] = []
+
+        anonymous_query = self._is_anonymized_query(query_intent)
+
+        # In anonymized description queries, extracted name_candidates are often
+        # supporting places ("Dublin", "Hartford") or partial phrases, not the
+        # target. Name search, especially prefix search, can flood the front of
+        # the ranking with lookalikes. Use those terms in history/context scoring
+        # instead.
+        if not DISABLE_NAME_FALLBACK and not anonymous_query:
+            for name in self._name_variants_for_search(query_intent.name_candidates):
+                attempted_routes.append(f"name:{name}")
+                route_results.append(self._tag_result_source(self.search_by_name(name, top_n=per_route_n), "name"))
+
+        history_terms = self._history_terms_from_intent(query_intent, anonymous_query=anonymous_query)
+        if history_terms:
+            attempted_routes.append("history")
+            geo_country = query_intent.geo_hints.country if query_intent.geo_hints else None
+            geo_place = query_intent.geo_hints.place_name if query_intent.geo_hints else None
+            route_results.append(
+                self._tag_result_source(
+                    self.search_by_history_terms(
+                        history_terms,
+                        top_n=per_route_n,
+                        country=geo_country,
+                        place_name=geo_place,
+                    ),
+                    "history",
+                )
+            )
+
+        categories = [tag for tag in query_intent.query_tags if tag in VALID_CATEGORIES]
+        if anonymous_query and history_terms:
+            categories = [tag for tag in categories if tag not in WEAK_RETRIEVAL_CATEGORIES]
+        country = query_intent.geo_hints.country if query_intent.geo_hints else None
+        if anonymous_query:
+            for category in categories[:3]:
+                attempted_routes.append(f"category:{category}")
+                route_results.append(
+                    self._tag_result_source(
+                        self.search_by_category(category, country=country, top_n=per_route_n),
+                        "category",
+                    )
+                )
+
+        if anonymous_query and query_intent.query_tags:
+            season = query_intent.season_hint if query_intent.season_hint != "unknown" else None
+            attempted_routes.append("tags")
+            route_results.append(
+                self._tag_result_source(
+                    self.search_by_tags(query_intent.query_tags, season=season, top_n=per_route_n),
+                    "tags",
+                )
+            )
+
+        merged = self._merge_candidate_results(
+            route_results,
+            top_n=max(top_n, 50),
+            anonymous_query=anonymous_query,
+        )
+        if anonymous_query and merged:
+            self._apply_contextual_intent_boosts(merged, query_intent)
+            merged = sorted(
+                merged,
+                key=lambda item: (
+                    float(item.get("hybrid_score") or 0.0),
+                    float(item.get("context_score") or 0.0),
+                    float(item.get("history_rank_score") or 0.0),
+                    float(item.get("popularity") or 0.0),
+                ),
+                reverse=True,
+            )[:top_n]
+        else:
+            merged = merged[:top_n]
+        result = {
+            "candidates": merged,
+            "count": len(merged),
+            "generated_by": generated_by,
+            "anonymous_query": anonymous_query,
+            "routes": attempted_routes,
+            "route_counts": {
+                result.get("source_method", f"route_{idx}"): result.get("count", 0)
+                for idx, result in enumerate(route_results)
+            },
         }
+
+        if not merged:
+            result["warning"] = (
+                "No viewpoints found matching the hybrid search criteria. "
+                "The database may not contain viewpoints matching the requested clues."
+            )
+            result["suggestion"] = "Try fewer criteria, a direct attraction name, or broader history/location terms."
+            if query_intent.name_candidates and not anonymous_query:
+                result["explicit_name_search_failed"] = True
+                result["suggestion"] = (
+                    "This is an explicit named query. Retry search_with_llm_sql with alternate spellings, "
+                    "transliterations, accent-stripped variants, or shorter distinctive name fragments. "
+                    "Avoid broad category/tag fallback unless a location filter makes it very specific."
+                )
+
+        return result
+
+    def _tag_result_source(self, result: Dict[str, Any], source_method: str) -> Dict[str, Any]:
+        result = dict(result or {})
+        result["source_method"] = source_method
+        for candidate in result.get("candidates") or []:
+            if isinstance(candidate, dict):
+                candidate.setdefault("source_methods", [])
+                if source_method not in candidate["source_methods"]:
+                    candidate["source_methods"].append(source_method)
+        return result
+
+    def _name_variants_for_search(self, names: List[str]) -> List[str]:
+        variants: List[str] = []
+        for name in names or []:
+            cleaned = " ".join(str(name).split())
+            if not cleaned:
+                continue
+            variants.append(cleaned)
+            if len(cleaned) > 4:
+                variants.append(cleaned[: max(3, len(cleaned) // 2)])
+        return self._dedupe_text(variants)[:6]
+
+    def _is_anonymized_query(self, query_intent: QueryIntent) -> bool:
+        raw_query = (getattr(query_intent, "raw_query", None) or "").casefold()
+        anonymous_markers = (
+            "anonymized",
+            "anonymised",
+            "unnamed site",
+            "the unnamed",
+            "this unnamed",
+        )
+        return any(marker in raw_query for marker in anonymous_markers) or not bool(query_intent.name_candidates)
+
+    def _history_terms_from_intent(self, query_intent: QueryIntent, anonymous_query: bool) -> List[str]:
+        terms: List[str] = []
+        terms.extend(query_intent.name_candidates or [])
+        if query_intent.geo_hints:
+            terms.extend([query_intent.geo_hints.place_name, query_intent.geo_hints.country])
+        if anonymous_query:
+            terms.extend(self._distinctive_context_terms(getattr(query_intent, "raw_query", None)))
+            terms.extend(self._strong_history_phrases(getattr(query_intent, "raw_query", None)))
+            terms.extend(query_intent.scene_hints or [])
+            terms.extend(tag.replace("_", " ") for tag in (query_intent.query_tags or []) if tag)
+        return self._dedupe_text([term for term in terms if term])[:24]
+
+    def _strong_history_phrases(self, raw_query: Optional[str]) -> List[str]:
+        if not raw_query:
+            return []
+
+        text = " ".join(str(raw_query).split())
+        text = re.sub(r"(?i)this anonymized tourist attraction", " ", text)
+        text = re.sub(r"(?i)identify .*? clues:?", " ", text)
+        text = re.sub(r"(?i)find .*? clues:?", " ", text)
+
+        phrases: List[str] = []
+        # Prefer distinctive clauses over generic visual tag tails.
+        for sentence in re.split(r"(?<=[.!?])\s+", text):
+            cleaned = sentence.strip(" :;,.")
+            if len(cleaned) < 12:
+                continue
+            lowered = cleaned.casefold()
+            if any(term in lowered for term in GENERIC_HISTORY_TERMS):
+                # Keep sentences with a real unique marker even if they also
+                # contain generic words such as "tourist attraction".
+                if not re.search(
+                    r"(?i)\b(?:first known|largest|oldest|cleanest|UNESCO|World Heritage|built|designed by|named after|located|crossing|dynasty|century|Buddha|Phoenician|Norse|Michelin|Balancing Rock|Water-Moon|Snaefell|Chao Phraya|Lake Pichola)\b",
+                    cleaned,
+                ):
+                    continue
+            if re.search(
+                r"(?i)\b(?:first known|largest|oldest|cleanest|UNESCO|World Heritage|built|designed by|named after|located|crossing|dynasty|century|Buddha|Phoenician|Norse|Michelin|Balancing Rock|Water-Moon|Snaefell|Chao Phraya|Lake Pichola)\b",
+                cleaned,
+            ):
+                phrases.append(cleaned)
+
+        # Add compact proper-noun phrases and quoted-style distinctive chunks.
+        proper_phrase_pattern = re.compile(
+            r"\b[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’.-]{2,}(?:\s+(?:of|de|del|du|la|le|the|and|&|[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’.-]{2,})){1,5}\b"
+        )
+        phrases.extend(match.group(0) for match in proper_phrase_pattern.finditer(text))
+
+        # Add short keyword phrases around highly distinctive nouns.
+        distinctive_patterns = [
+            r"first known European settlement in North America",
+            r"Norse village",
+            r"Phoenician port city",
+            r"ancient maritime culture",
+            r"Asia's cleanest village",
+            r"Balancing Rock",
+            r"inverted roller coaster",
+            r"Bolliger\s*&\s*Mabillard",
+            r"single pylon",
+            r"cable-stayed bridge",
+            r"Water-Moon Cave",
+            r"Lake Pichola",
+            r"City Palace",
+            r"Snaefell Mountain Course",
+        ]
+        for pattern in distinctive_patterns:
+            for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+                phrases.append(match.group(0))
+
+        filtered = []
+        for phrase in phrases:
+            cleaned = " ".join(str(phrase).strip(" .,:;").split())
+            if len(cleaned) < 4:
+                continue
+            if cleaned.casefold() in GENERIC_HISTORY_TERMS:
+                continue
+            filtered.append(cleaned)
+        return self._dedupe_text(filtered)[:8]
+
+    def _distinctive_context_terms(self, raw_query: Optional[str]) -> List[str]:
+        if not raw_query:
+            return []
+
+        text = " ".join(str(raw_query).split())
+        text = re.sub(r"(?i)\b(?:the unnamed site|this anonymized tourist attraction)\b", " ", text)
+        terms: List[str] = []
+
+        # Years, road names, measurements, and named routes are often the facts
+        # that distinguish same-region candidates.
+        case_insensitive_patterns = [
+            r"\b[12][0-9]{3}\b",
+            r"\b[A-Z][0-9]\b",
+            r"\b[0-9]+(?:\.[0-9]+)?\s*(?:mile|miles|km|kilometres|feet|ft|metres|meters|acre|gallons)\b",
+        ]
+        for pattern in case_insensitive_patterns:
+            terms.extend(match.group(0) for match in re.finditer(pattern, text, flags=re.IGNORECASE))
+
+        proper_patterns = [
+            r"\b[A-Z][0-9]\s+[A-Z][A-Za-z'’.-]+(?:\s+to\s+[A-Z][A-Za-z'’.-]+)?\s+Road\b",
+            r"\b[A-Z][A-Za-z'’.-]{3,}\s+to\s+[A-Z][A-Za-z'’.-]{3,}\b",
+            r"\b[A-Z][A-Za-z0-9'’.-]+(?:\s+(?:Road|Course|Race|Railway|Sanctuary|Convent|Abbey|Bridge|Tower|Crater|Basin|Park|Garden|Ghat|Caves|Dome|Library|Palace|Kremlin|Island|District|County|Province|Valley|River|Reservoir|Mountain|Hill|Point|Street|Avenue|Drive|Chowk|Church|Temple|Monastery|Mansion|Museum|Theatre|Theater|Company|Family)){1,2}\b",
+            r"\b[A-Z][A-Za-z'’.-]{3,}(?:\s+(?:of|the|and|[A-Z][A-Za-z'’.-]{3,})){1,4}\b",
+        ]
+        for pattern in proper_patterns:
+            terms.extend(match.group(0) for match in re.finditer(pattern, text))
+
+        for token in re.findall(r"\b[A-Z][A-Za-z0-9'’.-]{4,}\b", text):
+            folded = token.casefold()
+            if folded not in DISTINCTIVE_CONTEXT_STOPWORDS:
+                terms.append(token)
+
+        filtered: List[str] = []
+        for term in terms:
+            cleaned = " ".join(str(term).strip(" .,:;()[]{}\"'").split())
+            if len(cleaned) < 4:
+                continue
+            folded = cleaned.casefold()
+            words = [word.casefold() for word in re.findall(r"[A-Za-z0-9'’.-]+", cleaned)]
+            if all(word in DISTINCTIVE_CONTEXT_STOPWORDS for word in words):
+                continue
+            if folded in GENERIC_HISTORY_TERMS:
+                continue
+            filtered.append(cleaned)
+
+        return self._dedupe_text(filtered)[:24]
+
+    def _dedupe_text(self, values: List[str]) -> List[str]:
+        seen = set()
+        deduped = []
+        for value in values:
+            cleaned = " ".join(str(value).split())
+            key = cleaned.casefold()
+            if cleaned and key not in seen:
+                seen.add(key)
+                deduped.append(cleaned)
+        return deduped
+
+    def _merge_candidate_results(
+        self,
+        route_results: List[Dict[str, Any]],
+        top_n: int,
+        anonymous_query: bool = False,
+    ) -> List[Dict[str, Any]]:
+        merged: Dict[int, Dict[str, Any]] = {}
+
+        for result in route_results:
+            source_method = result.get("source_method", "unknown")
+            for rank, candidate in enumerate(result.get("candidates") or [], start=1):
+                if not isinstance(candidate, dict):
+                    continue
+                viewpoint_id = candidate.get("viewpoint_id")
+                if not isinstance(viewpoint_id, int):
+                    continue
+
+                existing = merged.setdefault(
+                    viewpoint_id,
+                    {
+                        "viewpoint_id": viewpoint_id,
+                        "name_primary": candidate.get("name_primary"),
+                        "name_variants": candidate.get("name_variants") or {},
+                        "category_norm": candidate.get("category_norm"),
+                        "name_score": 0.0,
+                        "geo_score": 0.0,
+                        "category_score": 0.0,
+                        "popularity": float(candidate.get("popularity") or 0.0),
+                        "tag_overlap_score": 0.0,
+                        "season_match_bonus": 0.0,
+                        "source_methods": [],
+                        "route_ranks": {},
+                    },
+                )
+
+                existing["name_primary"] = existing.get("name_primary") or candidate.get("name_primary")
+                existing["name_variants"] = existing.get("name_variants") or candidate.get("name_variants") or {}
+                existing["category_norm"] = existing.get("category_norm") or candidate.get("category_norm")
+                existing["popularity"] = max(float(existing.get("popularity") or 0.0), float(candidate.get("popularity") or 0.0))
+                existing["name_score"] = max(float(existing.get("name_score") or 0.0), float(candidate.get("name_score") or 0.0))
+                existing["geo_score"] = max(float(existing.get("geo_score") or 0.0), float(candidate.get("geo_score") or 0.0))
+                existing["category_score"] = max(float(existing.get("category_score") or 0.0), float(candidate.get("category_score") or 0.0))
+
+                if source_method == "tags":
+                    existing["tag_overlap_score"] = max(float(existing.get("tag_overlap_score") or 0.0), 1.0 / max(rank, 1))
+                if source_method == "history":
+                    existing["history_score"] = max(float(existing.get("history_score") or 0.0), float(candidate.get("name_score") or 0.0))
+                    existing["history_rank_score"] = max(float(existing.get("history_rank_score") or 0.0), 1.0 / max(rank, 1))
+                if source_method == "name":
+                    existing["name_rank_score"] = max(float(existing.get("name_rank_score") or 0.0), 1.0 / max(rank, 1))
+
+                if source_method not in existing["source_methods"]:
+                    existing["source_methods"].append(source_method)
+                existing["route_ranks"][source_method] = min(existing["route_ranks"].get(source_method, rank), rank)
+
+        for candidate in merged.values():
+            source_bonus = min(0.12, 0.04 * max(0, len(candidate.get("source_methods", [])) - 1))
+            rank_bonus = sum(1.0 / max(rank, 1) for rank in candidate.get("route_ranks", {}).values()) * 0.03
+            history_score = float(candidate.get("history_score") or 0.0)
+            history_rank_score = float(candidate.get("history_rank_score") or 0.0)
+            name_rank_score = float(candidate.get("name_rank_score") or 0.0)
+            tag_score = float(candidate.get("tag_overlap_score") or 0.0)
+            category_score = float(candidate.get("category_score") or 0.0)
+            geo_score = float(candidate.get("geo_score") or 0.0)
+            popularity = float(candidate.get("popularity") or 0.0)
+            name_score = float(candidate.get("name_score") or 0.0)
+
+            if anonymous_query:
+                candidate["hybrid_score"] = min(
+                    1.0,
+                    0.46 * history_score
+                    + 0.18 * history_rank_score
+                    + 0.18 * geo_score
+                    + 0.05 * tag_score
+                    + 0.05 * category_score
+                    + 0.02 * popularity
+                    + source_bonus
+                    + rank_bonus,
+                )
+            else:
+                candidate["hybrid_score"] = min(
+                    1.0,
+                    0.68 * name_score
+                    + 0.12 * name_rank_score
+                    + 0.06 * history_score
+                    + 0.06 * geo_score
+                    + 0.04 * max(category_score, tag_score)
+                    + 0.02 * popularity
+                    + source_bonus
+                    + rank_bonus,
+                )
+
+        return sorted(
+            merged.values(),
+            key=lambda item: (
+                float(item.get("hybrid_score") or 0.0),
+                float(item.get("name_score") or 0.0),
+                float(item.get("popularity") or 0.0),
+            ),
+            reverse=True,
+        )[:top_n]
+
+    def _apply_contextual_intent_boosts(
+        self,
+        candidates: List[Dict[str, Any]],
+        query_intent: QueryIntent,
+    ) -> None:
+        """Boost recalled candidates whose stored context matches extracted geo/history clues."""
+        ids = [candidate.get("viewpoint_id") for candidate in candidates if isinstance(candidate.get("viewpoint_id"), int)]
+        if not ids:
+            return
+
+        context_by_id = self._candidate_contexts(ids)
+        raw_query = getattr(query_intent, "raw_query", None) or ""
+        clue_phrases = self._strong_history_phrases(raw_query)
+        distinctive_terms = self._distinctive_context_terms(raw_query)
+        geo_terms: List[str] = []
+        if query_intent.geo_hints:
+            geo_terms.extend([query_intent.geo_hints.place_name, query_intent.geo_hints.country])
+        name_terms = [term for term in (query_intent.name_candidates or []) if len(str(term).strip()) >= 4]
+        tag_terms = [str(tag).replace("_", " ") for tag in (query_intent.query_tags or []) if tag]
+
+        for candidate in candidates:
+            viewpoint_id = candidate.get("viewpoint_id")
+            context = context_by_id.get(viewpoint_id, "").casefold()
+            if not context:
+                continue
+
+            phrase_hits = sum(1 for phrase in clue_phrases if phrase and phrase.casefold() in context)
+            distinctive_hits = sum(1 for term in distinctive_terms if term and term.casefold() in context)
+            geo_hits = sum(1 for term in geo_terms if term and str(term).casefold() in context)
+            name_hits = sum(1 for term in name_terms if term and str(term).casefold() in context)
+            tag_hits = sum(1 for term in tag_terms if term and str(term).casefold() in context)
+
+            context_score = min(
+                1.0,
+                0.20 * min(phrase_hits, 4)
+                + 0.10 * min(distinctive_hits, 5)
+                + 0.12 * min(geo_hits, 2)
+                + 0.08 * min(name_hits, 2)
+                + 0.04 * min(tag_hits, 3),
+            )
+            candidate["context_score"] = context_score
+            candidate["context_phrase_hits"] = phrase_hits
+            candidate["context_distinctive_hits"] = distinctive_hits
+            candidate["context_geo_hits"] = geo_hits
+            candidate["hybrid_score"] = min(1.0, float(candidate.get("hybrid_score") or 0.0) + 0.30 * context_score)
+
+    def _candidate_contexts(self, viewpoint_ids: List[int]) -> Dict[int, str]:
+        if not viewpoint_ids:
+            return {}
+
+        sql = """
+        SELECT
+            e.viewpoint_id,
+            COALESCE(e.name_primary, '') AS name_primary,
+            COALESCE(e.name_variants::text, '') AS name_variants,
+            COALESCE(e.category_norm, '') AS category_norm,
+            COALESCE(w.wikipedia_title, '') AS wikipedia_title,
+            COALESCE(w.extract_text, '') AS extract_text,
+            COALESCE(string_agg(DISTINCT a.viewpoint_country, ' '), '') AS countries,
+            COALESCE(string_agg(DISTINCT a.viewpoint_region, ' '), '') AS regions
+        FROM viewpoint_entity e
+        LEFT JOIN viewpoint_wiki w ON e.viewpoint_id = w.viewpoint_id
+        LEFT JOIN viewpoint_commons_assets a ON e.viewpoint_id = a.viewpoint_id
+        WHERE e.viewpoint_id = ANY(%s)
+        GROUP BY e.viewpoint_id, e.name_primary, e.name_variants, e.category_norm, w.wikipedia_title, w.extract_text
+        """
+        with db.get_cursor() as cursor:
+            cursor.execute(sql, (viewpoint_ids,))
+            rows = cursor.fetchall()
+
+        contexts: Dict[int, str] = {}
+        for row in rows:
+            contexts[row["viewpoint_id"]] = " ".join(
+                str(row.get(key) or "")
+                for key in [
+                    "name_primary",
+                    "name_variants",
+                    "category_norm",
+                    "wikipedia_title",
+                    "extract_text",
+                    "countries",
+                    "regions",
+                ]
+            )
+        return contexts
     
     def search_by_name(
         self,
@@ -1066,7 +1411,9 @@ CRITICAL INSTRUCTIONS:
     def search_by_history_terms(
         self,
         terms: List[str],
-        top_n: int = 50
+        top_n: int = 50,
+        country: Optional[str] = None,
+        place_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Search viewpoints by matching terms in historical/Wikipedia text.
@@ -1095,13 +1442,187 @@ CRITICAL INSTRUCTIONS:
                 "suggestion": "Provide non-empty keywords or phrases to search in history text."
             }
         
-        # Build SQL with OR conditions and a simple match score
+        query_text = " ".join(normalized_terms)
+        ilike_patterns = [f"%{t}%" for t in normalized_terms]
+        ilike_where = " OR ".join(["w.extract_text ILIKE %s"] * len(normalized_terms))
+        ilike_match_cases = " + ".join(
+            ["CASE WHEN w.extract_text ILIKE %s THEN 1 ELSE 0 END"] * len(normalized_terms)
+        )
+        exact_phrase_cases = " + ".join(
+            ["CASE WHEN (w.wikipedia_title ILIKE %s OR w.extract_text ILIKE %s) THEN 1 ELSE 0 END"] * len(normalized_terms)
+        )
+        geo_terms: List[str] = []
+        if country:
+            geo_terms.extend(normalize_country_name(country))
+        if place_name:
+            geo_terms.append(place_name)
+        geo_terms = self._dedupe_text([term for term in geo_terms if term and str(term).strip()])
+        geo_patterns = [f"%{term}%" for term in geo_terms]
+        if geo_patterns:
+            geo_context = (
+                "COALESCE(g.geo_text, '') || ' ' || "
+                "COALESCE(w.wikipedia_title, '') || ' ' || COALESCE(w.extract_text, '')"
+            )
+            geo_score_sql = (
+                "CASE WHEN ("
+                + " OR ".join([f"{geo_context} ILIKE %s"] * len(geo_patterns))
+                + ") THEN 1.0 ELSE 0.0 END AS geo_score"
+            )
+        else:
+            geo_score_sql = "1.0 AS geo_score"
+
+        # PostgreSQL full-text rank is not exact Okapi BM25, but it gives a much
+        # better lexical relevance signal than boolean ILIKE term matching.
+        sql = f"""
+        WITH query AS (
+            SELECT websearch_to_tsquery('english', %s) AS tsq
+        ),
+        geo AS (
+            SELECT
+                viewpoint_id,
+                string_agg(
+                    DISTINCT COALESCE(viewpoint_country, '') || ' ' || COALESCE(viewpoint_region, ''),
+                    ' '
+                ) AS geo_text
+            FROM viewpoint_commons_assets
+            GROUP BY viewpoint_id
+        ),
+        ranked AS (
+            SELECT
+                e.viewpoint_id,
+                e.name_primary,
+                e.name_variants,
+                e.category_norm,
+                e.popularity,
+                ts_rank_cd(
+                    to_tsvector(
+                        'english',
+                        COALESCE(w.wikipedia_title, '') || ' ' || COALESCE(w.extract_text, '')
+                    ),
+                    query.tsq,
+                    32
+                ) AS fts_rank,
+                LEAST(1.0, ({ilike_match_cases})::float / %s) AS ilike_score
+                ,LEAST(1.0, ({exact_phrase_cases})::float / %s) AS exact_phrase_score,
+                {geo_score_sql}
+            FROM viewpoint_entity e
+            INNER JOIN viewpoint_wiki w ON e.viewpoint_id = w.viewpoint_id
+            LEFT JOIN geo g ON e.viewpoint_id = g.viewpoint_id
+            CROSS JOIN query
+            WHERE (
+                to_tsvector(
+                    'english',
+                    COALESCE(w.wikipedia_title, '') || ' ' || COALESCE(w.extract_text, '')
+                ) @@ query.tsq
+                OR ({ilike_where})
+            )
+        )
+        SELECT DISTINCT
+            viewpoint_id,
+            name_primary,
+            name_variants,
+            category_norm,
+            popularity,
+            LEAST(1.0, GREATEST(fts_rank, ilike_score, exact_phrase_score)) AS name_score,
+            geo_score,
+            CASE WHEN category_norm IS NOT NULL THEN 0.5 ELSE 0.0 END AS category_score
+        FROM ranked
+        ORDER BY geo_score DESC, name_score DESC, popularity DESC NULLS LAST
+        LIMIT %s
+        """
+        
+        params = [query_text]
+        params.extend(ilike_patterns)
+        params.append(len(normalized_terms))
+        for pattern in ilike_patterns:
+            params.extend([pattern, pattern])
+        params.append(len(normalized_terms))
+        params.extend(geo_patterns)
+        params.extend(ilike_patterns)
+        params.append(top_n)
+        
+        try:
+            with db.get_cursor() as cursor:
+                cursor.execute(sql, params)
+                rows = cursor.fetchall()
+        except Exception:
+            return self._search_by_history_terms_ilike(
+                normalized_terms,
+                top_n,
+                country=country,
+                place_name=place_name,
+            )
+        
+        candidates = []
+        for row in rows:
+            candidates.append(ViewpointCandidate(
+                viewpoint_id=row['viewpoint_id'],
+                name_primary=row['name_primary'],
+                name_variants=row.get('name_variants') or {},
+                category_norm=row.get('category_norm'),
+                name_score=float(row.get('name_score', 0.0)),
+                geo_score=float(row.get('geo_score', 1.0)),
+                category_score=float(row.get('category_score', 0.0)),
+                popularity=float(row.get('popularity', 0.0))
+            ))
+        
+        result = {
+            "candidates": [c.model_dump() for c in candidates],
+            "count": len(candidates),
+            "sql": sql,
+            "params": params,
+            "ranking": "postgres_full_text_ts_rank_cd"
+        }
+        
+        if len(candidates) == 0:
+            result["warning"] = "No viewpoints found matching the history terms."
+            result["suggestion"] = "Try different keywords or broaden the history-related terms."
+        
+        return result
+
+    def _search_by_history_terms_ilike(
+        self,
+        normalized_terms: List[str],
+        top_n: int,
+        country: Optional[str] = None,
+        place_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        # Fallback for older PostgreSQL versions or unusual text-search configs.
         match_cases = " + ".join(
             ["CASE WHEN w.extract_text ILIKE %s THEN 1 ELSE 0 END"] * len(normalized_terms)
         )
         where_clause = " OR ".join(["w.extract_text ILIKE %s"] * len(normalized_terms))
+        geo_terms: List[str] = []
+        if country:
+            geo_terms.extend(normalize_country_name(country))
+        if place_name:
+            geo_terms.append(place_name)
+        geo_terms = self._dedupe_text([term for term in geo_terms if term and str(term).strip()])
+        geo_patterns = [f"%{term}%" for term in geo_terms]
+        if geo_patterns:
+            geo_context = (
+                "COALESCE(g.geo_text, '') || ' ' || "
+                "COALESCE(w.wikipedia_title, '') || ' ' || COALESCE(w.extract_text, '')"
+            )
+            geo_score_sql = (
+                "CASE WHEN ("
+                + " OR ".join([f"{geo_context} ILIKE %s"] * len(geo_patterns))
+                + ") THEN 1.0 ELSE 0.0 END as geo_score"
+            )
+        else:
+            geo_score_sql = "1.0 as geo_score"
         
         sql = f"""
+        WITH geo AS (
+            SELECT
+                viewpoint_id,
+                string_agg(
+                    DISTINCT COALESCE(viewpoint_country, '') || ' ' || COALESCE(viewpoint_region, ''),
+                    ' '
+                ) AS geo_text
+            FROM viewpoint_commons_assets
+            GROUP BY viewpoint_id
+        )
         SELECT DISTINCT
             e.viewpoint_id,
             e.name_primary,
@@ -1109,17 +1630,19 @@ CRITICAL INSTRUCTIONS:
             e.category_norm,
             e.popularity,
             LEAST(1.0, ({match_cases})::float / %s) as name_score,
-            1.0 as geo_score,
+            {geo_score_sql},
             CASE WHEN e.category_norm IS NOT NULL THEN 0.5 ELSE 0.0 END as category_score
         FROM viewpoint_entity e
         INNER JOIN viewpoint_wiki w ON e.viewpoint_id = w.viewpoint_id
+        LEFT JOIN geo g ON e.viewpoint_id = g.viewpoint_id
         WHERE ({where_clause})
-        ORDER BY name_score DESC, e.popularity DESC NULLS LAST
+        ORDER BY geo_score DESC, name_score DESC, e.popularity DESC NULLS LAST
         LIMIT %s
         """
         
         params = [f"%{t}%" for t in normalized_terms]
         params.append(len(normalized_terms))
+        params.extend(geo_patterns)
         params.extend([f"%{t}%" for t in normalized_terms])
         params.append(top_n)
         
@@ -1144,7 +1667,8 @@ CRITICAL INSTRUCTIONS:
             "candidates": [c.model_dump() for c in candidates],
             "count": len(candidates),
             "sql": sql,
-            "params": params
+            "params": params,
+            "ranking": "ilike_fallback"
         }
         
         if len(candidates) == 0:

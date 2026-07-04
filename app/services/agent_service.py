@@ -8,6 +8,10 @@ import json
 from typing import List, Dict, Any, Optional
 from openai import OpenAI
 
+from app.console_encoding import configure_console_encoding
+
+configure_console_encoding()
+
 from app.config import settings
 from app.schemas.query import QueryIntent, ViewpointResult
 from app.tools.extract_query_intent import get_extract_query_intent_tool
@@ -29,7 +33,10 @@ class AgentService:
     """
     
     def __init__(self, openai_client: Optional[OpenAI] = None, perfect_match_top_k: int = 5):
-        self.client = openai_client or OpenAI(api_key=settings.OPENAI_API_KEY)
+        self.client = openai_client or OpenAI(
+            api_key=settings.OPENAI_API_KEY,
+            timeout=settings.OPENAI_TIMEOUT,
+        )
         self.model = "gpt-4o-mini"
         self.extract_tool = get_extract_query_intent_tool()
         self.sql_search = get_sql_search_tool()
@@ -158,6 +165,10 @@ class AgentService:
                                 "type": "object",
                                 "description": "Query intent object from extract_query_intent. Should include name_candidates, query_tags, season_hint, and geo_hints.",
                                 "properties": {
+                                    "raw_query": {
+                                        "type": "string",
+                                        "description": "Original user query text, if available. Preserve this from extract_query_intent for lexical history retrieval."
+                                    },
                                     "name_candidates": {
                                         "type": "array",
                                         "items": {"type": "string"},
@@ -536,7 +547,7 @@ Your job is to help users find information about tourist attractions and viewpoi
 
 You have access to SQL-based MCP tools:
 1. extract_query_intent - Extract structured intent from user text (use this first)
-2. search_with_llm_sql - **RECOMMENDED**: Search using LLM-generated SQL (handles name, category, country, season, and tags automatically)
+2. search_with_llm_sql - **RECOMMENDED**: Deterministic hybrid search (handles name, history phrases, category, country, season, and tags automatically)
 3. search_by_category - Search by category using SQL (mountain, lake, temple, etc.)
 4. search_by_tags - Search by visual tags using SQL (snow_peak, cherry_blossom, etc.)
 5. search_by_history_terms - Search by historical/Wikipedia text using keywords
@@ -553,6 +564,7 @@ Iterative Search Strategy:
    - If category search failed → try search_by_history_terms with keywords from the query
    - If you found some candidates but they don't match well → try rank_and_explain_results to re-evaluate
    - Try different name variations in search_with_llm_sql (it will handle name matching)
+   - For explicit named queries with non-empty search_with_llm_sql results, keep those hybrid candidates as the primary candidate list
    - Try broader category searches, then narrow down
    - Try searching by related terms or synonyms using search_by_history_terms
 3. **Quality Check**: After each search, evaluate:
@@ -586,6 +598,9 @@ Use these SQL-based tools strategically:
    - Season filtering
    - Visual tags
    - Combined criteria
+   - Preserve query_intent.raw_query from extract_query_intent when calling search_with_llm_sql; it contains the original wording used for deterministic history/phrase retrieval.
+   - For anonymized or description-only queries, prioritize distinctive historical/geographic phrases over generic visual tags such as park, cityscape, valley, exterior, sunny, or panoramic.
+   - For explicit named queries, trust search_with_llm_sql name-route candidates first. Do not let generic history/category results replace a plausible hybrid candidate list.
 3. For specialized searches, use specific tools:
    - If only categories → use search_by_category
      **CRITICAL: If geo_hints.country is present in query_intent, ALWAYS pass the country parameter to search_by_category**
@@ -596,6 +611,7 @@ Use these SQL-based tools strategically:
    - Try search_by_history_terms with keywords from the query
    - Try different name variations in search_with_llm_sql (it handles name matching automatically)
    - DO NOT immediately give up - use your remaining iterations to explore
+   - If search_with_llm_sql returned non-empty candidates for an explicit name query, use search_by_category/search_by_history_terms only as supporting evidence, not as a replacement candidate list.
 5. IMPORTANT: When user query mentions a country (e.g., "纪念中国" means "commemorating China"), you MUST use the country parameter in search_by_category to filter results by that country.
 6. If the user asks about history/legends/heritage or you need related results, use search_by_history_terms with keyword terms
 7. Get details for promising candidates (use get_viewpoint_details)
@@ -1275,7 +1291,8 @@ CRITICAL RULES:
         )
 
         candidate_objects = []
-        for c in candidates:
+        clean_candidates = [c for c in candidates if isinstance(c, dict)]
+        for c in clean_candidates[:20]:
             candidate_objects.append(ViewpointCandidate(
                 viewpoint_id=c["viewpoint_id"],
                 name_primary=c["name_primary"],
@@ -1285,6 +1302,11 @@ CRITICAL RULES:
                 geo_score=c.get("geo_score", 0.0),
                 category_score=c.get("category_score", 0.0),
                 popularity=c.get("popularity", 0.0),
+                hybrid_score=c.get("hybrid_score"),
+                context_score=c.get("context_score"),
+                context_phrase_hits=c.get("context_phrase_hits"),
+                context_distinctive_hits=c.get("context_distinctive_hits"),
+                context_geo_hits=c.get("context_geo_hits"),
             ))
 
         top_k_candidates = candidate_objects[:self.perfect_match_top_k] if candidate_objects else []
@@ -1293,7 +1315,14 @@ CRITICAL RULES:
         perfect_match_score = perfect_match_candidate.name_score if perfect_match_candidate else 0.0
 
         top_candidate = candidate_objects[0] if candidate_objects else None
-        has_very_high_match = top_candidate and top_candidate.name_score > 0.8
+        top_candidate_score = 0.0
+        if top_candidate:
+            top_candidate_score = max(
+                top_candidate.name_score or 0.0,
+                top_candidate.hybrid_score or 0.0,
+                top_candidate.context_score or 0.0,
+            )
+        has_very_high_match = bool(top_candidate and top_candidate_score > 0.8)
 
         results = self.llm_service.rank_and_fuse(
             candidates=candidate_objects,
@@ -1319,7 +1348,10 @@ CRITICAL RULES:
             result_dict["_stop_signal"] = True
             result_dict["_note"] = (
                 f"VERY HIGH MATCH FOUND in ranked results "
-                f"(name_score={top_candidate.name_score:.2f})! You should "
+                f"(best_score={top_candidate_score:.2f}, "
+                f"name_score={top_candidate.name_score:.2f}, "
+                f"hybrid_score={(top_candidate.hybrid_score or 0.0):.2f}, "
+                f"context_score={(top_candidate.context_score or 0.0):.2f})! You should "
                 f"STOP searching and provide the final answer."
             )
 
@@ -1371,12 +1403,15 @@ CRITICAL RULES:
             
             # Convert dict to QueryIntent object
             geo_hints_dict = query_intent_dict.get("geo_hints", {})
+            if not isinstance(geo_hints_dict, dict):
+                geo_hints_dict = {}
             geo_hints = GeoHints(
                 place_name=geo_hints_dict.get("place_name"),
                 country=geo_hints_dict.get("country")
-            ) if geo_hints_dict else None
+            )
             
             query_intent = QueryIntent(
+                raw_query=query_intent_dict.get("raw_query") or arguments.get("original_query"),
                 name_candidates=query_intent_dict.get("name_candidates", []),
                 query_tags=query_intent_dict.get("query_tags", []),
                 season_hint=query_intent_dict.get("season_hint", "unknown"),

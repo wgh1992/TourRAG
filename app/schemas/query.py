@@ -35,6 +35,10 @@ class GeoHints(BaseModel):
 
 class QueryIntent(BaseModel):
     """Structured query intent extracted from user input"""
+    raw_query: Optional[str] = Field(
+        None,
+        description="Original user query text, retained for deterministic lexical retrieval."
+    )
     name_candidates: List[str] = Field(
         default_factory=list,
         description="Possible place names or aliases mentioned or implied."
@@ -79,6 +83,11 @@ class ViewpointCandidate(BaseModel):
     popularity: float
     tag_overlap_score: Optional[float] = None
     season_match_bonus: Optional[float] = None
+    hybrid_score: Optional[float] = None
+    context_score: Optional[float] = None
+    context_phrase_hits: Optional[int] = None
+    context_distinctive_hits: Optional[int] = None
+    context_geo_hits: Optional[int] = None
 
 
 class Evidence(BaseModel):

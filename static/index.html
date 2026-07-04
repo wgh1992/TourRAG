@@ -1109,7 +1109,7 @@
                     html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">';
                     
                     commonsImages.forEach(asset => {
-                        const imageUrl = `${API_BASE}/api/v1/image/${asset.id}`;
+                        const imageUrl = asset.image_url || `${API_BASE}/api/v1/image/${asset.id}`;
                         html += `
                             <div style="border-radius: 8px; overflow: hidden; border: 2px solid #e0e0e0;">
                                 <img src="${imageUrl}" 
@@ -1118,6 +1118,7 @@
                                      onclick="window.open('${imageUrl}', '_blank')"
                                      onerror="this.style.display='none'">
                                 ${asset.caption ? `<div style="padding: 8px; font-size: 0.85rem; color: #666;">${asset.caption.substring(0, 50)}${asset.caption.length > 50 ? '...' : ''}</div>` : ''}
+                                ${asset.image_url ? `<div style="padding: 0 8px 8px; font-size: 0.8rem;"><a href="${asset.image_url}" target="_blank" rel="noopener noreferrer">Open image URL</a></div>` : ''}
                             </div>
                         `;
                     });
@@ -1154,7 +1155,7 @@
                                 html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">';
                                 
                                 fetchedCommons.forEach(asset => {
-                                    const imageUrl = `${API_BASE}/api/v1/image/${asset.id}`;
+                                    const imageUrl = asset.image_url || `${API_BASE}/api/v1/image/${asset.id}`;
                                     html += `
                                         <div style="border-radius: 8px; overflow: hidden; border: 2px solid #e0e0e0;">
                                             <img src="${imageUrl}" 
@@ -1163,6 +1164,7 @@
                                                  onclick="window.open('${imageUrl}', '_blank')"
                                                  onerror="this.style.display='none'">
                                             ${asset.caption ? `<div style="padding: 8px; font-size: 0.85rem; color: #666;">${asset.caption.substring(0, 50)}${asset.caption.length > 50 ? '...' : ''}</div>` : ''}
+                                            ${asset.image_url ? `<div style="padding: 0 8px 8px; font-size: 0.8rem;"><a href="${asset.image_url}" target="_blank" rel="noopener noreferrer">Open image URL</a></div>` : ''}
                                         </div>
                                     `;
                                 });

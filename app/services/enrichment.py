@@ -217,7 +217,8 @@ class EnrichmentService:
                         image_height,
                         image_format,
                         file_size_bytes,
-                        downloaded_at
+                        downloaded_at,
+                        local_path_or_blob_ref
                     FROM viewpoint_commons_assets
                     WHERE viewpoint_id = %s
                     ORDER BY timestamp DESC NULLS LAST
@@ -241,7 +242,8 @@ class EnrichmentService:
                         image_height,
                         image_format,
                         file_size_bytes,
-                        downloaded_at
+                        downloaded_at,
+                        local_path_or_blob_ref
                     FROM viewpoint_commons_assets
                     WHERE viewpoint_id = %s
                     ORDER BY timestamp DESC NULLS LAST
@@ -251,6 +253,8 @@ class EnrichmentService:
             rows = cursor.fetchall()
             results = []
             for row in rows:
+                image_ref = row.get('local_path_or_blob_ref')
+                image_url = image_ref if isinstance(image_ref, str) and image_ref.startswith(("http://", "https://")) else None
                 asset = {
                     "id": row['id'],
                     "file_id": row['commons_file_id'],
@@ -261,7 +265,8 @@ class EnrichmentService:
                     "timestamp": row['timestamp'].isoformat() if row['timestamp'] else None,
                     "hash": row['hash'],
                     "license": row['license'],
-                    "has_image": row.get('image_blob') is not None or row.get('downloaded_at') is not None,
+                    "has_image": row.get('image_blob') is not None or image_url is not None or row.get('downloaded_at') is not None,
+                    "image_url": image_url,
                     "image_width": row.get('image_width'),
                     "image_height": row.get('image_height'),
                     "image_format": row.get('image_format'),

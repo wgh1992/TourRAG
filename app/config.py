@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     # OpenAI
     OPENAI_API_KEY: str
     OPENAI_MODEL: str = "gpt-4o-mini"  # Use gpt-4o-mini for cost efficiency (supports vision)
+    OPENAI_TIMEOUT: float = 30.0
     
     # MCP
     MCP_SERVER_URL: str = "http://localhost:8001"

@@ -28,41 +28,80 @@ TourRAG 是一个面向"景点问答/识别/推荐"的多模态智能系统，�
 - OpenAI GPT-4o (via MCP)
 - pg_trgm extension
 
-## 快速开始
+## 快速开始 / 运行程序
 
-### 1. 环境准备
+下面以 Windows PowerShell 为例，项目目录为 `E:\codex\TourRAG`。
 
-```bash
-# 创建虚拟环境
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# 或 venv\Scripts\activate  # Windows
+### 1. 进入项目目录
 
-# 安装依赖
-pip install -r requirements.txt
+```powershell
+cd E:\codex\TourRAG
 ```
 
-### 2. 数据库设置
+### 2. 创建并启用虚拟环境（首次运行）
+
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+```
+
+如果 PowerShell 阻止执行脚本，可以先运行：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\venv\Scripts\Activate.ps1
+```
+
+Linux/macOS 对应命令：
 
 ```bash
-# 创建数据库
-createdb tourrag_db
+python -m venv venv
+source venv/bin/activate
+```
 
-# 运行迁移
+### 3. 安装依赖（首次运行）
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+### 4. 配置环境变量
+
+项目根目录需要有 `.env` 文件，至少包含：
+
+```env
+DATABASE_URL=postgresql://postgres:password@localhost:5432/tourrag_db
+OPENAI_API_KEY=你的 OpenAI API Key
+OPENAI_MODEL=gpt-4o-mini
+MCP_SERVER_URL=http://localhost:8001/mcp
+```
+
+如果还没有数据库，需要先创建 PostgreSQL 数据库并执行迁移：
+
+```powershell
+createdb tourrag_db
 psql -d tourrag_db -f migrations/001_initial_schema.sql
 ```
 
-### 3. 配置环境变量
+### 5. 启动主服务
 
-```bash
-cp .env.example .env
-# 编辑 .env 文件，填入必要的配置
+```powershell
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8008 --reload
 ```
 
-### 4. 启动服务
+启动成功后访问：
 
-```bash
-uvicorn app.main:app --reload
+- 前端页面：http://127.0.0.1:8008/
+- API 文档：http://127.0.0.1:8008/docs
+
+### 6. 可选：启动 MCP 服务
+
+如果需要使用 FastMCP retrieval tools，另开一个 PowerShell 窗口运行：
+
+```powershell
+cd E:\codex\TourRAG
+.\venv\Scripts\Activate.ps1
+python -m app.mcp_server --transport streamable-http --host 127.0.0.1 --port 8001
 ```
 
 ## 数据模型
@@ -77,14 +116,7 @@ uvicorn app.main:app --reload
 
 ## API 文档
 
-启动服务后访问：http://localhost:8000/docs
-
-
-# 进入项目目录
-cd /Users/z3548881/Desktop/TourRAG/TourRAG_code
-
-# 运行服务器
-uvicorn app.main:app --host 0.0.0.0 --port 8008 --reload
+启动服务后访问：http://127.0.0.1:8008/docs
 
 ## 项目结构
 

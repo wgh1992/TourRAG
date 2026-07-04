@@ -7,14 +7,16 @@ import time
 import os
 import json
 import struct
+import logging
 from pathlib import Path
 from typing import Optional, List
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from psycopg2.extras import Json
 
+from app.console_encoding import configure_console_encoding
 from app.config import settings
 from app.schemas.query import (
     ExtractQueryIntentInput,
@@ -26,6 +28,14 @@ from app.tools.extract_query_intent import get_extract_query_intent_tool
 from app.services.retrieval import get_retrieval_service
 from app.services.llm_service import get_llm_service
 from app.services.database import db
+
+configure_console_encoding()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    force=True,
+)
+logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -91,15 +101,35 @@ def _find_local_images(viewpoint_id: int) -> List[Path]:
     return unique_matches
 
 
+def _decode_mojibake_utf8(value: str) -> Optional[str]:
+    """Recover UTF-8 text that was decoded as cp1252/latin1."""
+    raw = bytearray()
+    for char in value:
+        codepoint = ord(char)
+        if 0x80 <= codepoint <= 0x9F:
+            raw.append(codepoint)
+            continue
+        try:
+            raw.extend(char.encode("cp1252"))
+            continue
+        except UnicodeEncodeError:
+            pass
+        try:
+            raw.extend(char.encode("latin1"))
+        except UnicodeEncodeError:
+            return None
+
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
 def _fix_text_encoding(value):
     if isinstance(value, str):
-        for encoding in ("cp1252", "latin1"):
-            try:
-                decoded = value.encode(encoding).decode("utf-8")
-            except (UnicodeEncodeError, UnicodeDecodeError):
-                continue
-            if decoded != value:
-                return decoded
+        decoded = _decode_mojibake_utf8(value)
+        if decoded and decoded != value:
+            return _fix_text_encoding(decoded)
         return value
     if isinstance(value, list):
         return [_fix_text_encoding(item) for item in value]
@@ -121,6 +151,12 @@ def _display_name(name_primary: Optional[str], name_variants: Optional[dict]) ->
             return local_name
 
     return "Unnamed"
+
+
+def _fix_model_text(model):
+    if hasattr(model, "model_dump"):
+        return type(model)(**_fix_text_encoding(model.model_dump()))
+    return _fix_text_encoding(model)
 
 
 def _get_satellite_base_dir() -> Optional[Path]:
@@ -337,7 +373,7 @@ async def query_viewpoints(
     # Always use agent-based search with MCP tools
     from app.services.agent_service import get_agent_service
     
-    print(f"[Query] Using agent-based MCP tool search for: '{final_user_text}'")
+    logger.info("[Query] Using agent-based MCP tool search (len=%d)", len(final_user_text or ""))
     agent = get_agent_service()
     
     # Build query text (include image info if present)
@@ -346,10 +382,16 @@ async def query_viewpoints(
         query_text += " [with images]"
     
     # Use agent to answer the query
-    agent_result = await agent.answer_query(
-        user_query=query_text,
-        language=language
-    )
+    agent_used_fallback = False
+    try:
+        agent_result = await agent.answer_query(
+            user_query=query_text,
+            language=language
+        )
+    except Exception as exc:
+        logger.exception("Agent query failed, using SQL-only fallback: %r", exc)
+        agent_used_fallback = True
+        agent_result = {"tool_calls": [], "answer": ""}
     
     # Extract query intent and results from agent's tool calls
     query_intent = None
@@ -358,81 +400,102 @@ async def query_viewpoints(
     tool_calls_log = agent_result.get('tool_calls', [])
     sql_queries_log = []
     tag_schema_version = 'v1.0.0'
-    
-    # Process tool calls
-    for tool_call in tool_calls_log:
-        tool_name = tool_call.get('tool')
-        result = tool_call.get('result', {})
-        
-        if tool_name == 'extract_query_intent':
-            if 'query_intent' in result:
-                from app.schemas.query import QueryIntent, GeoHints
-                intent_dict = result['query_intent']
-                query_intent = QueryIntent(
-                    name_candidates=intent_dict.get('name_candidates', []),
-                    query_tags=intent_dict.get('query_tags', []),
-                    season_hint=intent_dict.get('season_hint', 'unknown'),
-                    scene_hints=intent_dict.get('scene_hints', []),
-                    geo_hints=GeoHints(
-                        place_name=intent_dict.get('geo_hints', {}).get('place_name'),
-                        country=intent_dict.get('geo_hints', {}).get('country')
-                    ),
-                    confidence_notes=intent_dict.get('confidence_notes', [])
-                )
-                tag_schema_version = result.get('tag_schema_version', 'v1.0.0')
-        
-        # Collect SQL queries and candidates from SQL search tools
-        sql_tools = [
-            'search_by_name',
-            'search_by_category',
-            'search_by_tags',
-            'search_by_history_terms',
-            'search_popular',
-            'search_with_llm_sql'
-        ]
-        if tool_name in sql_tools:
-            if 'sql' in result:
-                sql_queries_log.append({
-                    "sql": result.get('sql'),
-                    "params": result.get('params', [])
-                })
-            # Collect candidates from SQL search
-            if 'candidates' in result:
-                all_candidates.extend(result['candidates'])
-        
-        if tool_name == 'rank_and_explain_results':
-            results_data = result.get('results', [])
-            from app.schemas.query import ViewpointResult, VisualTagInfo, Evidence
-            for r in results_data:
-                # Convert visual tags
-                visual_tags = []
-                for vt in r.get('visual_tags', []):
-                    evidence_list = [Evidence(**e) if isinstance(e, dict) else e 
-                                    for e in vt.get('evidence', [])]
-                    visual_tags.append(VisualTagInfo(
-                        season=vt['season'],
-                        tags=vt['tags'],
-                        confidence=vt['confidence'],
-                        evidence=evidence_list,
-                        tag_source=vt['tag_source']
+
+    if agent_used_fallback:
+        from app.schemas.query import QueryIntent, GeoHints
+        from app.tools.sql_search_tool import get_sql_search_tool
+
+        query_intent = QueryIntent(
+            name_candidates=[final_user_text.strip()],
+            query_tags=[],
+            season_hint="unknown",
+            scene_hints=[],
+            geo_hints=GeoHints(),
+            confidence_notes=["OpenAI agent unavailable; used direct SQL name search."],
+        )
+        name_result = get_sql_search_tool().search_by_name(final_user_text.strip(), top_n=50)
+        if name_result.get("sql"):
+            sql_queries_log.append({
+                "sql": name_result.get("sql"),
+                "params": name_result.get("params", []),
+            })
+        all_candidates = name_result.get("candidates", [])
+        tool_calls_log = [{"tool": "search_by_name", "result": name_result}]
+    else:
+        # Process tool calls
+        for tool_call in tool_calls_log:
+            tool_name = tool_call.get('tool')
+            result = tool_call.get('result', {})
+            
+            if tool_name == 'extract_query_intent':
+                if 'query_intent' in result:
+                    from app.schemas.query import QueryIntent, GeoHints
+                    intent_dict = result['query_intent']
+                    query_intent = QueryIntent(
+                        name_candidates=intent_dict.get('name_candidates', []),
+                        query_tags=intent_dict.get('query_tags', []),
+                        season_hint=intent_dict.get('season_hint', 'unknown'),
+                        scene_hints=intent_dict.get('scene_hints', []),
+                        geo_hints=GeoHints(
+                            place_name=intent_dict.get('geo_hints', {}).get('place_name'),
+                            country=intent_dict.get('geo_hints', {}).get('country')
+                        ),
+                        confidence_notes=intent_dict.get('confidence_notes', [])
+                    )
+                    tag_schema_version = result.get('tag_schema_version', 'v1.0.0')
+            
+            # Collect SQL queries and candidates from SQL search tools
+            sql_tools = [
+                'search_by_name',
+                'search_by_category',
+                'search_by_tags',
+                'search_by_history_terms',
+                'search_popular',
+                'search_with_llm_sql'
+            ]
+            if tool_name in sql_tools:
+                if 'sql' in result:
+                    sql_queries_log.append({
+                        "sql": result.get('sql'),
+                        "params": result.get('params', [])
+                    })
+                # Collect candidates from SQL search
+                if 'candidates' in result:
+                    all_candidates.extend(result['candidates'])
+            
+            if tool_name == 'rank_and_explain_results':
+                results_data = result.get('results', [])
+                from app.schemas.query import ViewpointResult, VisualTagInfo, Evidence
+                for r in results_data:
+                    # Convert visual tags
+                    visual_tags = []
+                    for vt in r.get('visual_tags', []):
+                        evidence_list = [Evidence(**e) if isinstance(e, dict) else e 
+                                        for e in vt.get('evidence', [])]
+                        visual_tags.append(VisualTagInfo(
+                            season=vt['season'],
+                            tags=vt['tags'],
+                            confidence=vt['confidence'],
+                            evidence=evidence_list,
+                            tag_source=vt['tag_source']
+                        ))
+                    
+                    final_results.append(ViewpointResult(
+                        viewpoint_id=r['viewpoint_id'],
+                        name_primary=r['name_primary'],
+                        name_variants=r.get('name_variants', {}),
+                        category_norm=r.get('category_norm'),
+                        historical_summary=r.get('historical_summary'),
+                        historical_evidence=[Evidence(**e) if isinstance(e, dict) else e 
+                                            for e in r.get('historical_evidence', [])],
+                        visual_tags=visual_tags,
+                        match_confidence=r.get('match_confidence', 0.0),
+                        match_explanation=r.get('match_explanation', '')
                     ))
-                
-                final_results.append(ViewpointResult(
-                    viewpoint_id=r['viewpoint_id'],
-                    name_primary=r['name_primary'],
-                    name_variants=r.get('name_variants', {}),
-                    category_norm=r.get('category_norm'),
-                    historical_summary=r.get('historical_summary'),
-                    historical_evidence=[Evidence(**e) if isinstance(e, dict) else e 
-                                        for e in r.get('historical_evidence', [])],
-                    visual_tags=visual_tags,
-                    match_confidence=r.get('match_confidence', 0.0),
-                    match_explanation=r.get('match_explanation', '')
-                ))
     
     # If no ranked results but we have candidates, use LLM service to rank them
     if not final_results and all_candidates and query_intent:
-        print(f"[Query] Ranking {len(all_candidates)} candidates from SQL searches")
+        logger.info("[Query] Ranking %d candidates from SQL searches", len(all_candidates))
         from app.schemas.query import ViewpointCandidate
         candidate_objects = []
         for c in all_candidates:
@@ -447,7 +510,7 @@ async def query_viewpoints(
     
     # Ensure we have query intent (extract if agent didn't provide it)
     if not query_intent:
-        print(f"[Query] Agent didn't extract intent, extracting directly")
+        logger.info("[Query] Agent didn't extract intent, extracting directly")
         intent_input = ExtractQueryIntentInput(
             user_text=final_user_text,
             user_images=None,
@@ -536,11 +599,13 @@ async def query_viewpoints(
     
     # If no results from agent, return empty results with intent
     if not final_results:
-        print(f"[Query] No results from agent search")
+        logger.info("[Query] No results from agent search")
+    else:
+        final_results = [_fix_model_text(result) for result in final_results]
     
     execution_time = int((time.time() - start_time) * 1000)
     
-    print(f"[Query] Agent MCP tool search completed: {len(final_results)} results in {execution_time}ms")
+    logger.info("[Query] Agent MCP tool search completed: %d results in %dms", len(final_results), execution_time)
     
     # Log query (optional - could be async)
     try:
@@ -568,7 +633,7 @@ async def query_viewpoints(
             ))
     except Exception as e:
         # Log error but don't fail the request
-        print(f"Failed to log query: {e}")
+        logger.warning("Failed to log query: %r", e)
     
     return QueryResponse(
         query_intent=query_intent,
@@ -645,7 +710,7 @@ async def get_viewpoint_detail(viewpoint_id: int):
                 annotation = json.load(f)
             satellite_images = _build_satellite_images(annotation)
         except Exception as exc:
-            print(f"Failed to load satellite annotation {annotation_path}: {exc}")
+            logger.warning("Failed to load satellite annotation %s: %r", annotation_path, exc)
     return {
         "viewpoint_id": entity['viewpoint_id'],
         "name_primary": _display_name(entity.get('name_primary'), entity.get('name_variants')),
@@ -712,7 +777,7 @@ async def get_viewpoints_for_map(
             )
             rows = cursor.fetchall()
     except Exception as exc:
-        print(f"PostGIS map query failed, falling back to EWKB parsing: {exc}")
+        logger.warning("PostGIS map query failed, falling back to EWKB parsing: %r", exc)
         with db.get_cursor() as cursor:
             cursor.execute(
                 """
@@ -748,14 +813,22 @@ async def get_image(asset_id: int):
                 image_blob,
                 image_format,
                 image_width,
-                image_height
+                image_height,
+                local_path_or_blob_ref
             FROM viewpoint_commons_assets
-            WHERE id = %s AND image_blob IS NOT NULL
+            WHERE id = %s
         """, (asset_id,))
         
         result = cursor.fetchone()
         
         if not result:
+            raise HTTPException(status_code=404, detail="Image not found")
+
+        image_ref = result.get('local_path_or_blob_ref')
+        if result.get('image_blob') is None and isinstance(image_ref, str) and image_ref.startswith(("http://", "https://")):
+            return RedirectResponse(url=image_ref)
+
+        if result.get('image_blob') is None:
             raise HTTPException(status_code=404, detail="Image not found")
         
         image_blob = result['image_blob']

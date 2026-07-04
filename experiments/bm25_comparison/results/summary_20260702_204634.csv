@@ -1,0 +1,2 @@
+method,queries,mrr,hit@1,precision@1,recall@1,ndcg@1,hit@3,precision@3,recall@3,ndcg@3,hit@5,precision@5,recall@5,ndcg@5,hit@10,precision@10,recall@10,ndcg@10
+no_rag_list,5,0.6,0.6,0.6,0.6,0.6,0.6,0.2,0.6,0.6,0.6,0.12,0.6,0.6,0.6,0.06,0.6,0.6

@@ -249,13 +249,13 @@ async def run_batch(
 
 
 def main() -> None:
-    default_csv = PROJECT_ROOT / "tests" / "test_set_input.csv"
+    default_csv = PROJECT_ROOT / "tests" / "datasets" / "test_set_input.csv"
     parser = argparse.ArgumentParser(description="Batch comparison: RAG vs No-RAG.")
     parser.add_argument(
         "--input-csv",
         type=Path,
         default=default_csv,
-        help="Input CSV (same format as test_RAG). Default: tests/test_set_input.csv",
+        help="Input CSV (same format as test_RAG). Default: tests/datasets/test_set_input.csv",
     )
     parser.add_argument(
         "--output-dir",

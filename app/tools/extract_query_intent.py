@@ -156,6 +156,7 @@ Remember: query_tags must ONLY contain values from the controlled vocabulary lis
             # Empty input - return default intent
             return ExtractQueryIntentOutput(
                 query_intent=QueryIntent(
+                    raw_query=input_data.user_text,
                     name_candidates=[],
                     query_tags=[],
                     season_hint="unknown",
@@ -232,6 +233,7 @@ Remember: query_tags must ONLY contain values from the controlled vocabulary lis
         
         # Construct output
         query_intent = QueryIntent(
+            raw_query=input_data.user_text,
             name_candidates=query_intent_dict.get("name_candidates", []),
             query_tags=validated_tags,
             season_hint=query_intent_dict.get("season_hint", "unknown"),

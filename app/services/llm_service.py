@@ -89,13 +89,22 @@ class LLMService:
                     if vtag['season'] == query_intent.season_hint:
                         season_match_bonus = max(season_match_bonus, vtag['confidence'])
             
-            # Calculate final match confidence
-            match_confidence = (
+            # Calculate final match confidence. For anonymized/description-only
+            # queries, retrieval already encodes strong history/context clues
+            # that are not reflected by name/category/tag overlap alone.
+            base_confidence = (
                 candidate.name_score * 0.4 +
                 candidate.category_score * 0.2 +
                 tag_overlap_score * 0.3 +
                 season_match_bonus * 0.1
             )
+            retrieval_confidence = (
+                (candidate.hybrid_score or 0.0) * 0.65 +
+                (candidate.context_score or 0.0) * 0.25 +
+                candidate.name_score * 0.05 +
+                candidate.category_score * 0.05
+            )
+            match_confidence = max(base_confidence, retrieval_confidence)
             
             # Convert visual tags to structured format
             visual_tags = []

@@ -21,7 +21,7 @@ The comparison shows that without RAG, the system cannot return **in-database** 
 
 - Same as the main project: Python 3.10+, `requirements.txt`, `.env` with `OPENAI_API_KEY`.
 - For RAG branch: PostgreSQL and migrated DB (so that agent search tools work).
-- Input CSV: **test set** is `tests/test_set_input.csv` (columns: `viewpoint_base_name`, `image_path`, `history_summary`, `season_info`). This is the default for the batch comparison script.
+- Input CSV: **test set** is `tests/datasets/test_set_input.csv` (columns: `viewpoint_base_name`, `image_path`, `history_summary`, `season_info`). This is the default for the batch comparison script.
 
 ## Quick Start
 
@@ -36,7 +36,7 @@ python experiments/no_rag_baseline.py --query "推荐秋天看红叶的景点"
 
 Uses the same CSV as the RAG batch test. For each row, runs both RAG and No-RAG and writes one JSONL per run plus a summary.
 
-Uses **`tests/test_set_input.csv`** by default:
+Uses **`tests/datasets/test_set_input.csv`** by default:
 
 ```bash
 python experiments/run_batch_comparison.py --limit 20 --name-top-k 5

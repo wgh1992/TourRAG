@@ -1,0 +1,2 @@
+method,queries,mrr,hit@1,precision@1,recall@1,ndcg@1,hit@3,precision@3,recall@3,ndcg@3,hit@5,precision@5,recall@5,ndcg@5,hit@10,precision@10,recall@10,ndcg@10
+tourrag_agent,50,0.5995238095238095,0.56,0.56,0.56,0.56,0.64,0.21333333333333335,0.64,0.6078557852142875,0.64,0.128,0.64,0.6078557852142875,0.66,0.066,0.66,0.6145224518809541
